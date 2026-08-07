@@ -314,7 +314,7 @@ class DiscographyAnalyzerApp:
 
         controls = ttk.Frame(toolbar, style="Toolbar.TFrame")
         controls.grid(row=1, column=0, sticky="ew", pady=(7, 0))
-        controls.columnconfigure(5, weight=1)
+        controls.columnconfigure(6, weight=1)
         ttk.Label(controls, text="Показано:", style="Toolbar.TLabel").grid(
             row=0, column=0, sticky="w"
         )
@@ -350,19 +350,26 @@ class DiscographyAnalyzerApp:
             controls,
             text="Автоподгонка столбцов",
             command=self.autofit_columns,
-        ).grid(row=0, column=5, sticky="e")
+        ).grid(row=0, column=5, sticky="w", padx=(4, 0))
+        self.utilities_button = ttk.Button(
+            controls,
+            text="Утилиты",
+            command=self._open_utilities,
+            style="Accent.TButton",
+        )
+        self.utilities_button.grid(row=0, column=7, sticky="e", padx=(4, 0))
         ttk.Label(controls, text="Фильтр", style="Toolbar.TLabel").grid(
-            row=0, column=6, padx=(12, 5)
+            row=0, column=8, padx=(12, 5)
         )
         ttk.Entry(controls, textvariable=self.filter_var, width=26).grid(
-            row=0, column=7
+            row=0, column=9
         )
         ttk.Button(
             controls,
             text="×",
             width=3,
             command=lambda: self.filter_var.set(""),
-        ).grid(row=0, column=8, padx=(4, 0))
+        ).grid(row=0, column=10, padx=(4, 0))
 
         table_frame = ttk.Frame(self.root)
         table_frame.grid(row=4, column=0, sticky="nsew", padx=12)
@@ -575,6 +582,9 @@ class DiscographyAnalyzerApp:
             else:
                 self._group_column_width = width
             self.tree.column("#0", width=width, stretch=False)
+
+    def _open_utilities(self) -> None:
+        messagebox.showinfo(APP_NAME, "В разработке", parent=self.root)
 
     def apply_theme(self) -> None:
         dark = self.dark_theme_var.get()
