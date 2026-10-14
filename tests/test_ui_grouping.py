@@ -276,7 +276,7 @@ class UiGroupingTests(unittest.TestCase):
 
         self.assertEqual(len(app.tree.item_ids), 3)
 
-    def test_analysis_error_resets_shown_count(self) -> None:
+    def test_analysis_error_resets_results_and_widgets(self) -> None:
         class FakeValue:
             def __init__(self, value="") -> None:
                 self.value = value
@@ -285,15 +285,28 @@ class UiGroupingTests(unittest.TestCase):
                 self.value = value
 
         class FakeTree:
+            def __init__(self) -> None:
+                self.deleted: tuple[str, ...] = ()
+
             def get_children(self):
                 return ("old-row",)
 
-            def delete(self, *_items) -> None:
-                pass
+            def delete(self, *items) -> None:
+                self.deleted = items
 
-        class FakeButton:
-            def configure(self, **_values) -> None:
-                pass
+        class FakeWidget:
+            def __init__(self) -> None:
+                self.options: dict[str, object] = {}
+                self.text = "old info"
+
+            def configure(self, **values) -> None:
+                self.options.update(values)
+
+            def delete(self, *_args) -> None:
+                self.text = ""
+
+            def insert(self, _index, text) -> None:
+                self.text += text
 
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
         app._restore_buttons = lambda: None
@@ -302,17 +315,37 @@ class UiGroupingTests(unittest.TestCase):
         app.track_by_id = {"old": object()}
         app.variation_source_ids = {"old"}
         app.issue_by_id = {"old": object()}
+        app.audit_issue_by_id = {"old": object()}
+        app.audit_item_track_ids = {"old": "old"}
         app.visible_tracks = [object()]
         app.tree = FakeTree()
         app.statistics_var = FakeValue()
         app.shown_count_var = FakeValue("12 из 12")
-        app.unique_copy_button = FakeButton()
+        app.unique_copy_button = FakeWidget()
+        app.audit_fix_button = FakeWidget()
+        app.info_text = FakeWidget()
+        app.cover_label = FakeWidget()
+        app.cover_photo = object()
         app.root = object()
 
         with patch("discography_analyzer.ui.messagebox.showerror"):
             app._analysis_failed("test", generic=True)
 
+        self.assertIsNone(app.result)
+        self.assertEqual(app.track_by_id, {})
+        self.assertEqual(app.variation_source_ids, set())
+        self.assertEqual(app.issue_by_id, {})
+        self.assertEqual(app.audit_issue_by_id, {})
+        self.assertEqual(app.audit_item_track_ids, {})
+        self.assertEqual(app.visible_tracks, [])
+        self.assertEqual(app.tree.deleted, ("old-row",))
         self.assertEqual(app.shown_count_var.value, "0 из 0")
+        self.assertEqual(app.statistics_var.value, "Статистика: —")
+        self.assertEqual(app.unique_copy_button.options, {"state": "disabled"})
+        self.assertEqual(app.audit_fix_button.options, {"state": "disabled"})
+        self.assertEqual(app.info_text.text, "Выберите трек в таблице")
+        self.assertIsNone(app.cover_photo)
+        self.assertEqual(app.cover_label.options["text"], "Обложка не выбрана")
 
     def test_folder_tree_can_expand_and_collapse_in_one_action(self) -> None:
         class FakeTab:

@@ -993,25 +993,12 @@ class DiscographyAnalyzerApp:
                 parent=self.root,
             )
             return
-        self.result = None
-        self.track_by_id.clear()
-        self.variation_source_ids.clear()
-        self.issue_by_id.clear()
-        getattr(self, "audit_issue_by_id", {}).clear()
-        getattr(self, "audit_item_track_ids", {}).clear()
-        self.visible_tracks.clear()
-        self.tree.delete(*self.tree.get_children())
+        self._clear_results()
         self.filter_var.set("")
-        self.statistics_var.set("Статистика: —")
-        self.shown_count_var.set("0 из 0")
-        self._clear_info()
         self._reset_progress()
         self.stop_event.clear()
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self.unique_copy_button.configure(state="disabled")
-        if hasattr(self, "audit_fix_button"):
-            self.audit_fix_button.configure(state="disabled")
         selected_formats = [
             name for name, variable in self.format_vars.items() if variable.get()
         ]
@@ -1110,40 +1097,31 @@ class DiscographyAnalyzerApp:
         self._sync_settings_from_ui()
         self._autosave()
 
-    def _analysis_stopped(self) -> None:
-        self._restore_buttons()
-        self.progress_state_var.set("Анализ остановлен")
+    def _clear_results(self) -> None:
+        """Drop the previous analysis from memory and from every widget."""
         self.result = None
         self.track_by_id.clear()
         self.variation_source_ids.clear()
         self.issue_by_id.clear()
-        getattr(self, "audit_issue_by_id", {}).clear()
-        getattr(self, "audit_item_track_ids", {}).clear()
+        self.audit_issue_by_id.clear()
+        self.audit_item_track_ids.clear()
         self.visible_tracks.clear()
         self.tree.delete(*self.tree.get_children())
         self.statistics_var.set("Статистика: —")
         self.shown_count_var.set("0 из 0")
         self.unique_copy_button.configure(state="disabled")
-        if hasattr(self, "audit_fix_button"):
-            self.audit_fix_button.configure(state="disabled")
+        self.audit_fix_button.configure(state="disabled")
         self._clear_info()
+
+    def _analysis_stopped(self) -> None:
+        self._restore_buttons()
+        self.progress_state_var.set("Анализ остановлен")
+        self._clear_results()
 
     def _analysis_failed(self, reason: str, generic: bool) -> None:
         self._restore_buttons()
         self.progress_state_var.set("Ошибка анализа")
-        self.result = None
-        self.track_by_id.clear()
-        self.variation_source_ids.clear()
-        self.issue_by_id.clear()
-        getattr(self, "audit_issue_by_id", {}).clear()
-        getattr(self, "audit_item_track_ids", {}).clear()
-        self.visible_tracks.clear()
-        self.tree.delete(*self.tree.get_children())
-        self.statistics_var.set("Статистика: —")
-        self.shown_count_var.set("0 из 0")
-        self.unique_copy_button.configure(state="disabled")
-        if hasattr(self, "audit_fix_button"):
-            self.audit_fix_button.configure(state="disabled")
+        self._clear_results()
         title = "Произошла ошибка при анализе" if generic else reason
         detail = f"\n\nПричина: {reason}" if generic and reason else ""
         messagebox.showerror(APP_NAME, title + detail, parent=self.root)
