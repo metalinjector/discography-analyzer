@@ -12,12 +12,14 @@ from .models import Track
 
 try:
     import mutagen
+    from mutagen.easyid3 import EasyID3
+    from mutagen.easymp4 import EasyMP4Tags
     from mutagen.flac import FLAC
     from mutagen.id3 import APIC, ID3
     from mutagen.mp4 import MP4, MP4Cover
 except ImportError:  # The GUI provides a friendly dependency message.
     mutagen = None
-    FLAC = ID3 = MP4 = APIC = MP4Cover = None
+    FLAC = ID3 = MP4 = APIC = MP4Cover = EasyID3 = EasyMP4Tags = None
 
 
 class MetadataDependencyError(RuntimeError):
@@ -176,9 +178,16 @@ def read_metadata(track: Track) -> None:
         )
     try:
         easy = mutagen.File(track.path, easy=True)
-        raw = mutagen.File(track.path, easy=False)
-        if raw is None:
+        if easy is None:
             raise ValueError("формат файла не распознан")
+        # Only ID3 and MP4 have a distinct "easy" tag view. For FLAC, APE and
+        # the other formats both calls return the same class, so the second
+        # parse would merely re-read the whole tag block (embedded covers
+        # included) from disk.
+        if isinstance(getattr(easy, "tags", None), (EasyID3, EasyMP4Tags)):
+            raw = mutagen.File(track.path, easy=False)
+        else:
+            raw = easy
 
         easy_tags = getattr(easy, "tags", None)
         for key, attr in EASY_FIELDS.items():

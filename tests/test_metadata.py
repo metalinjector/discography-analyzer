@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import io
+import struct
 import unittest
-
-from PIL import Image
-
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from PIL import Image
 
 from discography_analyzer.metadata import (
     _cover_details,
@@ -19,6 +20,17 @@ from discography_analyzer.models import Track
 
 # MPEG-1 Layer III, 128 kbps, 44.1 kHz: 417-byte frames, ~26 ms each.
 MP3_FRAMES = (b"\xff\xfb\x90\x00" + b"\x00" * 413) * 40
+
+
+def _flac_header() -> bytes:
+    """Minimal FLAC: "fLaC" + STREAMINFO (44.1 kHz, stereo, 16 bit, 1 s)."""
+    streaminfo = struct.pack(">HH", 4096, 4096) + b"\x00" * 6
+    bits = (44100 << 44) | (1 << 41) | (15 << 36) | 44100
+    streaminfo += bits.to_bytes(8, "big") + b"\x00" * 16
+    return b"fLaC" + bytes([0x80]) + len(streaminfo).to_bytes(3, "big") + streaminfo
+
+
+FLAC_HEADER = _flac_header()
 
 
 def make_track(path: Path) -> Track:
@@ -62,9 +74,39 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(_values(None, "title"), [])
         self.assertEqual(tags.length_calls, 0)
 
+    def test_formats_without_easy_wrapper_are_parsed_once(self) -> None:
+        import mutagen
+        from mutagen.id3 import ID3, TIT2
+
+        import discography_analyzer.metadata as metadata
+
+        with TemporaryDirectory() as directory:
+            flac_path = Path(directory) / "song.flac"
+            flac_path.write_bytes(FLAC_HEADER)
+            mp3_path = Path(directory) / "song.mp3"
+            mp3_path.write_bytes(MP3_FRAMES)
+            tags = ID3()
+            tags.add(TIT2(encoding=3, text="Song"))
+            tags.save(mp3_path)
+            flac_item, mp3_item = make_track(flac_path), make_track(mp3_path)
+
+            with patch.object(
+                metadata.mutagen, "File", wraps=mutagen.File
+            ) as file_calls:
+                read_metadata(flac_item)
+                flac_parses = file_calls.call_count
+                read_metadata(mp3_item)
+                mp3_parses = file_calls.call_count - flac_parses
+
+        self.assertEqual(flac_item.metadata_errors, [])
+        self.assertEqual(flac_item.duration_seconds, 1)
+        self.assertEqual(flac_parses, 1)
+        # ID3 needs the distinct EasyID3 view, so two parses are expected.
+        self.assertEqual(mp3_parses, 2)
+        self.assertEqual(mp3_item.metadata_errors, [])
+
     def test_preview_and_audit_agree_on_front_cover(self) -> None:
         import hashlib
-        import struct
 
         from mutagen.flac import FLAC, Picture
 
@@ -73,15 +115,9 @@ class MetadataTests(unittest.TestCase):
             Image.new("RGB", (8, 8), color).save(buffer, format="PNG")
             return buffer.getvalue()
 
-        # Minimal FLAC: "fLaC" + STREAMINFO (44.1 kHz, stereo, 16 bit, 1 s).
-        streaminfo = struct.pack(">HH", 4096, 4096) + b"\x00" * 6
-        bits = (44100 << 44) | (1 << 41) | (15 << 36) | 44100
-        streaminfo += bits.to_bytes(8, "big") + b"\x00" * 16
-        header = b"fLaC" + bytes([0x80]) + len(streaminfo).to_bytes(3, "big")
-
         with TemporaryDirectory() as directory:
             path = Path(directory) / "song.flac"
-            path.write_bytes(header + streaminfo)
+            path.write_bytes(FLAC_HEADER)
             audio = FLAC(path)
             back, front = Picture(), Picture()
             back.type, back.mime, back.data = 4, "image/png", png("#2f75b5")
