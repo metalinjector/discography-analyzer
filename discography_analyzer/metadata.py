@@ -199,6 +199,22 @@ def read_metadata(track: Track) -> None:
                 if value:
                     setattr(track, attr, value)
 
+        # ID3 keeps comments in COMM frames keyed "COMM:<desc>:<lang>", so the
+        # plain-name lookups above never see them. Only the standard comment
+        # (empty description) is used; iTunNORM-style technical frames stay
+        # in the full tag list.
+        if not track.comment and ID3 is not None and isinstance(raw_tags, ID3):
+            values = [
+                text
+                for frame in raw_tags.getall("COMM")
+                if not getattr(frame, "desc", "")
+                for text in _as_text_list(frame)
+                if text.strip()
+            ]
+            if values:
+                track.canonical_tags.setdefault("comment", values)
+                track.comment = "; ".join(values).strip()
+
         track_total = _first_any(
             easy_tags, ("tracktotal", "totaltracks", "totaltrack")
         ) or _first_any(raw_tags, ("TrackTotal", "TRACKTOTAL", "TOTALTRACKS"))

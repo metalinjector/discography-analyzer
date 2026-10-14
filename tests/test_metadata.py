@@ -5,7 +5,32 @@ import unittest
 
 from PIL import Image
 
-from discography_analyzer.metadata import _cover_details, _first, _values
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from discography_analyzer.metadata import (
+    _cover_details,
+    _first,
+    _values,
+    read_metadata,
+)
+from discography_analyzer.models import Track
+
+# MPEG-1 Layer III, 128 kbps, 44.1 kHz: 417-byte frames, ~26 ms each.
+MP3_FRAMES = (b"\xff\xfb\x90\x00" + b"\x00" * 413) * 40
+
+
+def make_track(path: Path) -> Track:
+    return Track(
+        id="one",
+        path=path,
+        root=path.parent,
+        filename=path.name,
+        relative_path=path.name,
+        relative_folder="(корень)",
+        format=path.suffix[1:].upper(),
+        size_bytes=path.stat().st_size,
+    )
 
 
 class _LazyTags:
@@ -35,6 +60,27 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(_first(None, "title"), "")
         self.assertEqual(_values(None, "title"), [])
         self.assertEqual(tags.length_calls, 0)
+
+    def test_id3_comment_frame_is_mapped_but_technical_frames_are_not(self) -> None:
+        from mutagen.id3 import COMM, ID3, TIT2
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "song.mp3"
+            path.write_bytes(MP3_FRAMES)
+            tags = ID3()
+            tags.add(TIT2(encoding=3, text="Song"))
+            tags.add(COMM(encoding=3, lang="eng", desc="iTunNORM", text=" 0000 "))
+            tags.add(COMM(encoding=3, lang="eng", desc="", text="Remastered 2011"))
+            tags.save(path)
+            item = make_track(path)
+
+            read_metadata(item)
+
+        self.assertEqual(item.title, "Song")
+        self.assertEqual(item.comment, "Remastered 2011")
+        self.assertEqual(item.canonical_tags["comment"], ["Remastered 2011"])
+        self.assertIn("COMM:iTunNORM:eng", item.all_tags)
+        self.assertEqual(item.metadata_errors, [])
 
     def test_cover_details_validate_image_and_dimensions(self) -> None:
         buffer = io.BytesIO()
