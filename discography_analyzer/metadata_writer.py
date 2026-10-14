@@ -64,6 +64,20 @@ def _available_path(path: Path) -> Path:
         counter += 1
 
 
+def _save_options(path: Path) -> dict[str, int]:
+    """Keep ID3v2.3 files at v2.3 instead of silently upgrading them to v2.4.
+
+    Mutagen writes ID3v2.4 by default. Many players, Windows Explorer and car
+    stereos still read only v2.3, so a "safe" separator fix must not change
+    the tag container version the user already has.
+    """
+    raw = mutagen.File(path, easy=False)
+    version = getattr(getattr(raw, "tags", None), "version", None)
+    if isinstance(version, tuple) and tuple(version[:2]) == (2, 3):
+        return {"v2_version": 3}
+    return {}
+
+
 def _write_verified_copy(
     track: Track,
     changes: dict[str, str],
@@ -83,6 +97,7 @@ def _write_verified_copy(
     backup_created = False
     try:
         shutil.copy2(source, temporary)
+        save_options = _save_options(temporary)
         audio = mutagen.File(temporary, easy=True)
         if audio is None:
             raise ValueError("формат файла не распознан")
@@ -94,7 +109,7 @@ def _write_verified_copy(
         for field, value in changes.items():
             key = EASY_TAG_KEYS[field]
             audio[key] = [value]
-        audio.save()
+        audio.save(**save_options)
 
         verified = mutagen.File(temporary, easy=True)
         if verified is None or getattr(verified, "tags", None) is None:

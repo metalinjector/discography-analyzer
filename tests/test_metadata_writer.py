@@ -75,8 +75,9 @@ class MetadataWriterTests(unittest.TestCase):
             fake_mutagen = SimpleNamespace(
                 File=Mock(
                     side_effect=[
-                        FakeAudio("Riana;Moby"),
-                        FakeAudio("wrong result"),
+                        FakeAudio("Riana;Moby"),  # raw read for save options
+                        FakeAudio("Riana;Moby"),  # easy view that gets edited
+                        FakeAudio("wrong result"),  # verification re-read
                     ]
                 )
             )
@@ -98,6 +99,34 @@ class MetadataWriterTests(unittest.TestCase):
                 list(folder.glob(".one-audit-*.flac")),
                 [],
             )
+
+    def test_id3v23_container_version_is_preserved(self) -> None:
+        from mutagen.id3 import ID3, TPE1, TIT2
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Album" / "one.mp3"
+            source.parent.mkdir()
+            # MPEG-1 Layer III, 128 kbps, 44.1 kHz: 417-byte frames.
+            source.write_bytes((b"\xff\xfb\x90\x00" + b"\x00" * 413) * 40)
+            tags = ID3()
+            tags.add(TIT2(encoding=3, text="Song"))
+            tags.add(TPE1(encoding=3, text="Riana;Moby"))
+            tags.save(source, v2_version=3)
+            self.assertEqual(ID3(source).version[:2], (2, 3))
+
+            item = make_track("one")
+            item.root = root
+            item.path = source
+            item.filename = source.name
+
+            _write_verified_copy(item, {"artist": "Riana, Moby"}, None)
+
+            saved = ID3(source)
+            self.assertEqual(saved.version[:2], (2, 3))
+            self.assertEqual(saved["TPE1"].text, ["Riana, Moby"])
+            self.assertEqual(saved["TIT2"].text, ["Song"])
+            self.assertEqual(item.artist, "Riana, Moby")
 
     def test_issues_for_one_file_are_written_in_one_job(self) -> None:
         item = make_track("one")
