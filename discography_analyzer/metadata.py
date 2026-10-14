@@ -114,23 +114,30 @@ def _cover_details(data: bytes, mime: str) -> tuple[str, int, str, int, int, str
     return mime or "image/unknown", len(data), digest, width, height, error
 
 
-def _extract_cover_details(
-    audio: Any,
-    path: Path,
-) -> tuple[str, int, str, int, int, str]:
+def _front_picture(pictures: list[Any]) -> Any:
+    """Prefer the picture marked as front cover (type 3), else the first one."""
+    return next(
+        (item for item in pictures if getattr(item, "type", 0) == 3),
+        pictures[0],
+    )
+
+
+def _embedded_cover(audio: Any, path: Path) -> tuple[bytes, str] | None:
+    """Return ``(data, mime)`` of the embedded cover shared by audit and UI.
+
+    One code path guarantees the preview shows exactly the picture whose
+    hash and dimensions the metadata audit reasoned about.
+    """
     if FLAC is not None and isinstance(audio, FLAC) and audio.pictures:
-        picture = next(
-            (item for item in audio.pictures if getattr(item, "type", 0) == 3),
-            audio.pictures[0],
-        )
-        return _cover_details(picture.data, picture.mime or "image/unknown")
+        picture = _front_picture(audio.pictures)
+        return picture.data, picture.mime or "image/unknown"
     if MP4 is not None and isinstance(audio, MP4) and audio.tags:
         covers = audio.tags.get("covr", [])
         if covers:
             cover = covers[0]
             image_format = getattr(cover, "imageformat", None)
             mime = "image/png" if image_format == MP4Cover.FORMAT_PNG else "image/jpeg"
-            return _cover_details(bytes(cover), mime)
+            return bytes(cover), mime
     tags = getattr(audio, "tags", None)
     if tags and hasattr(tags, "values"):
         pictures = [
@@ -139,14 +146,8 @@ def _extract_cover_details(
             if APIC is not None and isinstance(frame, APIC)
         ]
         if pictures:
-            picture = next(
-                (item for item in pictures if getattr(item, "type", 0) == 3),
-                pictures[0],
-            )
-            return _cover_details(
-                picture.data,
-                picture.mime or "image/unknown",
-            )
+            picture = _front_picture(pictures)
+            return picture.data, picture.mime or "image/unknown"
     if path.suffix.casefold() == ".ape" and tags:
         for key in ("Cover Art (Front)", "Cover Art (Back)"):
             value = tags.get(key)
@@ -154,8 +155,18 @@ def _extract_cover_details(
             if isinstance(raw, bytes):
                 _, _, data = raw.partition(b"\x00")
                 if data:
-                    return _cover_details(data, "image/unknown")
-    return "", 0, "", 0, 0, ""
+                    return data, "image/unknown"
+    return None
+
+
+def _extract_cover_details(
+    audio: Any,
+    path: Path,
+) -> tuple[str, int, str, int, int, str]:
+    cover = _embedded_cover(audio, path)
+    if cover is None:
+        return "", 0, "", 0, 0, ""
+    return _cover_details(*cover)
 
 
 def read_metadata(track: Track) -> None:
@@ -303,29 +314,9 @@ def read_embedded_cover(path: Path) -> tuple[bytes | None, str, str]:
         audio = mutagen.File(path, easy=False)
         if audio is None:
             return None, "", "Формат файла не распознан"
-        if FLAC is not None and isinstance(audio, FLAC) and audio.pictures:
-            picture = audio.pictures[0]
-            return picture.data, picture.mime or "image/unknown", ""
-        if MP4 is not None and isinstance(audio, MP4) and audio.tags:
-            covers = audio.tags.get("covr", [])
-            if covers:
-                cover = covers[0]
-                image_format = getattr(cover, "imageformat", None)
-                mime = "image/png" if image_format == MP4Cover.FORMAT_PNG else "image/jpeg"
-                return bytes(cover), mime, ""
-        tags = getattr(audio, "tags", None)
-        if tags and hasattr(tags, "values"):
-            for frame in tags.values():
-                if APIC is not None and isinstance(frame, APIC):
-                    return frame.data, frame.mime or "image/unknown", ""
-        if path.suffix.casefold() == ".ape" and tags:
-            for key in ("Cover Art (Front)", "Cover Art (Back)"):
-                value = tags.get(key)
-                raw = getattr(value, "value", value)
-                if isinstance(raw, bytes):
-                    _, _, data = raw.partition(b"\x00")
-                    if data:
-                        return data, "image/unknown", ""
-        return None, "", ""
+        cover = _embedded_cover(audio, path)
+        if cover is None:
+            return None, "", ""
+        return cover[0], cover[1], ""
     except Exception as exc:
         return None, "", str(exc)

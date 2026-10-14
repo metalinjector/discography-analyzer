@@ -12,6 +12,7 @@ from discography_analyzer.metadata import (
     _cover_details,
     _first,
     _values,
+    read_embedded_cover,
     read_metadata,
 )
 from discography_analyzer.models import Track
@@ -60,6 +61,44 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(_first(None, "title"), "")
         self.assertEqual(_values(None, "title"), [])
         self.assertEqual(tags.length_calls, 0)
+
+    def test_preview_and_audit_agree_on_front_cover(self) -> None:
+        import hashlib
+        import struct
+
+        from mutagen.flac import FLAC, Picture
+
+        def png(color: str) -> bytes:
+            buffer = io.BytesIO()
+            Image.new("RGB", (8, 8), color).save(buffer, format="PNG")
+            return buffer.getvalue()
+
+        # Minimal FLAC: "fLaC" + STREAMINFO (44.1 kHz, stereo, 16 bit, 1 s).
+        streaminfo = struct.pack(">HH", 4096, 4096) + b"\x00" * 6
+        bits = (44100 << 44) | (1 << 41) | (15 << 36) | 44100
+        streaminfo += bits.to_bytes(8, "big") + b"\x00" * 16
+        header = b"fLaC" + bytes([0x80]) + len(streaminfo).to_bytes(3, "big")
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "song.flac"
+            path.write_bytes(header + streaminfo)
+            audio = FLAC(path)
+            back, front = Picture(), Picture()
+            back.type, back.mime, back.data = 4, "image/png", png("#2f75b5")
+            front.type, front.mime, front.data = 3, "image/png", png("#e97824")
+            audio.add_picture(back)  # back cover deliberately listed first
+            audio.add_picture(front)
+            audio.save()
+            item = make_track(path)
+
+            read_metadata(item)
+            data, mime, error = read_embedded_cover(path)
+
+        self.assertEqual(error, "")
+        self.assertEqual(mime, "image/png")
+        self.assertEqual(data, front.data)
+        self.assertEqual(item.cover_hash, hashlib.sha256(front.data).hexdigest())
+        self.assertEqual((item.cover_width, item.cover_height), (8, 8))
 
     def test_id3_comment_frame_is_mapped_but_technical_frames_are_not(self) -> None:
         from mutagen.id3 import COMM, ID3, TIT2
