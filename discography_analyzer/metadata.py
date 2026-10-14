@@ -265,7 +265,7 @@ def read_metadata(track: Track) -> None:
                 track.duration_exact = float(exact)
                 # Rounded seconds are only for user-friendly display. The
                 # classifier uses the exact value above with no tolerance.
-                track.duration_seconds = int(round(float(exact)))
+                track.duration_seconds = round(float(exact))
             for source, target in (
                 ("bitrate", "bitrate"),
                 ("sample_rate", "sample_rate"),
@@ -285,7 +285,9 @@ def read_metadata(track: Track) -> None:
                     setattr(track, target, value)
 
         if raw_tags:
-            for key in raw_tags.keys():
+            # Vorbis comments are a *list* of (key, value) pairs, so plain
+            # iteration would yield tuples; .keys() is the portable form.
+            for key in raw_tags.keys():  # noqa: SIM118
                 try:
                     track.all_tags[str(key)] = _as_text_list(raw_tags[key])
                 except Exception as exc:  # One broken tag must not hide the rest.

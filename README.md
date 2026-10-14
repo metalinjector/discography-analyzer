@@ -80,6 +80,12 @@ Linux и macOS:
 python3 app.py
 ```
 
+Из любого каталога, если проект есть в `PYTHONPATH`:
+
+```bash
+python -m discography_analyzer
+```
+
 Либо после установки проекта:
 
 ```bash
@@ -193,7 +199,11 @@ discography-analyzer
 
 ```bash
 python -m unittest discover -s tests -v
+ruff check .
 ```
+
+Те же команды выполняет CI (`.github/workflows/tests.yml`) на Ubuntu и
+Windows для Python 3.10 и 3.12. Правила линтера заданы в `pyproject.toml`.
 
 Тесты проверяют строгую классификацию, разбор вариаций и артистов, сохранение
 настроек, структуру XLSX-отчёта и оба режима безопасного копирования.

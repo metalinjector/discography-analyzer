@@ -1,6 +1,6 @@
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
-import unittest
 from unittest.mock import patch
 
 from discography_analyzer.constants import TABLE_COLUMNS

@@ -1,5 +1,5 @@
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from discography_analyzer.completeness import (
     analyze_track_completeness,

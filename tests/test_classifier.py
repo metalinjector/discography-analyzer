@@ -1,5 +1,5 @@
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from discography_analyzer.classifier import classify_tracks
 from discography_analyzer.models import Track, TrackStatus

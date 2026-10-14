@@ -1,7 +1,7 @@
 import json
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from discography_analyzer.constants import DEFAULT_REPORT_COLORS
 from discography_analyzer.settings import AppSettings

@@ -360,7 +360,7 @@ def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
                 ),
             )
 
-    for folder, group in folder_tracks.items():
+    for group in folder_tracks.values():
         if len(group) > 1:
             for track in group:
                 if not track.track_number.strip():

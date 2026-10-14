@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import unittest
 from unittest.mock import Mock, patch
 
 from discography_analyzer.audit_models import (
@@ -84,13 +84,12 @@ class MetadataWriterTests(unittest.TestCase):
             with patch(
                 "discography_analyzer.metadata_writer.mutagen",
                 fake_mutagen,
-            ):
-                with self.assertRaisesRegex(ValueError, "проверка тега"):
-                    _write_verified_copy(
-                        item,
-                        {"artist": "Riana, Moby"},
-                        root.parent / "Backup",
-                    )
+            ), self.assertRaisesRegex(ValueError, "проверка тега"):
+                _write_verified_copy(
+                    item,
+                    {"artist": "Riana, Moby"},
+                    root.parent / "Backup",
+                )
 
             self.assertEqual(source.read_bytes(), b"original audio")
             self.assertEqual(item.artist, "Riana;Moby")
@@ -101,7 +100,7 @@ class MetadataWriterTests(unittest.TestCase):
             )
 
     def test_id3v23_container_version_is_preserved(self) -> None:
-        from mutagen.id3 import ID3, TPE1, TIT2
+        from mutagen.id3 import ID3, TIT2, TPE1
 
         with TemporaryDirectory() as directory:
             root = Path(directory)

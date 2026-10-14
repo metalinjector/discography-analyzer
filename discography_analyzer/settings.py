@@ -74,7 +74,7 @@ class AppSettings:
     folder_tree_mode: bool = False
     dark_theme: bool = True
     formats: dict[str, bool] = field(
-        default_factory=lambda: {name: True for name in SUPPORTED_FORMATS}
+        default_factory=lambda: dict.fromkeys(SUPPORTED_FORMATS, True)
     )
     variation_markers: list[str] = field(
         default_factory=lambda: list(DEFAULT_VARIATION_MARKERS)
@@ -87,7 +87,7 @@ class AppSettings:
     )
 
     @classmethod
-    def load(cls, path: Path | None = None) -> "AppSettings":
+    def load(cls, path: Path | None = None) -> AppSettings:
         target = path or settings_path()
         try:
             data = json.loads(target.read_text(encoding="utf-8"))

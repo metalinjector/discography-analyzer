@@ -1,10 +1,10 @@
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from discography_analyzer.copying import (
-    CopyMode,
     NOT_COPIED_FOLDER,
+    CopyMode,
     build_copy_plan,
     execute_copy_plan,
     flat_copy_filename,

@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import queue
 import threading
-from pathlib import Path
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import APP_NAME
 from .copying import (
+    NOT_COPIED_FOLDER,
     CopyMode,
     CopyPlan,
     CopyResult,
-    NOT_COPIED_FOLDER,
     build_copy_plan,
     execute_copy_plan,
 )

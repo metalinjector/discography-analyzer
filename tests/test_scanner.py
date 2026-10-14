@@ -1,8 +1,8 @@
+import threading
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import threading
-import unittest
 from unittest.mock import patch
 
 from discography_analyzer.scanner import _collect_files, analyze_collection

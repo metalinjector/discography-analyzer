@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import queue
 import threading
+import tkinter as tk
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .audit_models import MetadataAuditIssue

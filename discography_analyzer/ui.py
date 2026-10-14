@@ -1,21 +1,23 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import queue
 import subprocess
 import sys
 import threading
-from datetime import date
-from pathlib import Path
 import tkinter as tk
 import tkinter.font as tkfont
+from datetime import date
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk, UnidentifiedImageError
 
 from .audit_dialog import AuditFixDialog
 from .audit_models import AuditSeverity, MetadataAuditIssue
+from .completeness import parse_position
 from .constants import (
     APP_NAME,
     DEFAULT_REPORT_COLORS,
@@ -27,7 +29,6 @@ from .constants import (
     SUPPORTED_FORMATS,
     TABLE_COLUMNS,
 )
-from .completeness import parse_position
 from .copy_dialog import UniqueCopyDialog
 from .exporter import export_xlsx
 from .metadata import MetadataDependencyError, read_embedded_cover
@@ -2462,20 +2463,16 @@ class DiscographyAnalyzerApp:
     def _autosave(self) -> None:
         if self.settings.autosave:
             self._sync_settings_from_ui()
-            try:
+            with contextlib.suppress(OSError):
                 self.settings.save()
-            except OSError:
-                pass
 
     def on_close(self) -> None:
         if self.worker and self.worker.is_alive():
             self.stop_event.set()
         self._sync_settings_from_ui()
         if self.settings.autosave:
-            try:
+            with contextlib.suppress(OSError):
                 self.settings.save()
-            except OSError:
-                pass
         self.root.destroy()
 
 

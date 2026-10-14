@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 TRACK_PREFIX_RE = re.compile(
     r"^\s*(?:(?:cd|disc)\s*\d+\s*[-_. ]+)?(?:\d{1,3}\s*[-_.]\s*|\d{1,3}\s+)",
