@@ -5,10 +5,37 @@ import unittest
 
 from PIL import Image
 
-from discography_analyzer.metadata import _cover_details
+from discography_analyzer.metadata import _cover_details, _first, _values
+
+
+class _LazyTags:
+    """Mimics mutagen's EasyID3: ``len()`` is a full key enumeration."""
+
+    def __init__(self, data: dict[str, list[str]]) -> None:
+        self._data = data
+        self.length_calls = 0
+
+    def __len__(self) -> int:
+        self.length_calls += 1
+        return len(self._data)
+
+    def get(self, key: str, default=None):
+        return self._data.get(key, default)
 
 
 class MetadataTests(unittest.TestCase):
+    def test_tag_helpers_do_not_enumerate_easy_tags(self) -> None:
+        # ``bool(EasyID3)`` walks every registered easy key, which made tag
+        # lookups the slowest part of the whole analysis.
+        tags = _LazyTags({"title": ["Song"], "artist": ["A", "B"]})
+
+        self.assertEqual(_first(tags, "title"), "Song")
+        self.assertEqual(_values(tags, "artist"), ["A", "B"])
+        self.assertEqual(_values(tags, "album"), [])
+        self.assertEqual(_first(None, "title"), "")
+        self.assertEqual(_values(None, "title"), [])
+        self.assertEqual(tags.length_calls, 0)
+
     def test_cover_details_validate_image_and_dimensions(self) -> None:
         buffer = io.BytesIO()
         Image.new("RGB", (32, 48), "#e97824").save(buffer, format="PNG")

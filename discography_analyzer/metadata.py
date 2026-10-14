@@ -61,7 +61,10 @@ def _as_text_list(value: Any) -> list[str]:
 
 
 def _first(tags: Any, key: str) -> str:
-    if not tags:
+    # Compare with ``None`` rather than testing truthiness: ``bool(EasyID3)``
+    # enumerates every registered easy key through ``keys()`` and was the
+    # single most expensive operation of the whole analysis.
+    if tags is None:
         return ""
     value = tags.get(key)
     values = _as_text_list(value)
@@ -69,7 +72,7 @@ def _first(tags: Any, key: str) -> str:
 
 
 def _values(tags: Any, key: str) -> list[str]:
-    if not tags:
+    if tags is None:
         return []
     return [value for value in _as_text_list(tags.get(key)) if value.strip()]
 
