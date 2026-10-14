@@ -1753,11 +1753,11 @@ class DiscographyAnalyzerApp:
     def _selection_changed(self, _event=None) -> None:
         focused = self.tree.focus()
         if focused.startswith("audit-issue::"):
-            issue = self.audit_issue_by_id.get(
+            audit_issue = self.audit_issue_by_id.get(
                 focused.removeprefix("audit-issue::")
             )
-            if issue:
-                self._show_audit_issue_in_panel(issue)
+            if audit_issue:
+                self._show_audit_issue_in_panel(audit_issue)
                 return
         if focused.startswith("audit-group::"):
             self._show_audit_group_in_panel(focused)
@@ -2317,7 +2317,8 @@ class DiscographyAnalyzerApp:
         )
 
     def open_export(self) -> None:
-        if not self.result or not self.result.tracks:
+        result = self.result
+        if result is None or not result.tracks:
             messagebox.showinfo(
                 APP_NAME,
                 "Нет данных для экспорта. Сначала выполните анализ",
@@ -2411,12 +2412,12 @@ class DiscographyAnalyzerApp:
                 return
             try:
                 path = export_xlsx(
-                    self.result.tracks,
+                    result.tracks,
                     Path(chosen),
                     {key: variable.get() for key, variable in sheet_vars.items()},
                     [key for key, variable in column_vars.items() if variable.get()],
                     dict(self.settings.report_colors),
-                    self.result.audit_issues,
+                    result.audit_issues,
                 )
                 messagebox.showinfo(
                     APP_NAME, f"Отчёт успешно сохранён:\n{path}", parent=window
