@@ -33,6 +33,22 @@ DATA_ROW_HEIGHT = 17.25
 HEADER_ROW = 4
 DATA_START_ROW = 5
 
+# openpyxl style objects are immutable and interned per workbook, so sharing
+# one instance across thousands of cells is both safe and much cheaper than
+# allocating a new Font/Border/Alignment for every cell.
+DATA_FONT = Font(color=TEXT, size=9)
+DATA_BORDER = Border(bottom=ROW_BORDER)
+DATA_ALIGNMENT = Alignment(vertical="center")
+CENTER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
+_FILL_CACHE: dict[str, PatternFill] = {}
+
+
+def _fill(color: str) -> PatternFill:
+    fill = _FILL_CACHE.get(color)
+    if fill is None:
+        fill = _FILL_CACHE[color] = PatternFill("solid", fgColor=color)
+    return fill
+
 
 def _safe(value: Any) -> Any:
     if (
@@ -126,14 +142,23 @@ def _prepare_sheet(
     sheet.row_dimensions[HEADER_ROW].height = 22
 
 
-def _style_data_row(sheet, row_number: int, fill_color: str = WARM_WHITE) -> None:
+def _style_data_row(
+    sheet,
+    row_number: int,
+    column_count: int,
+    fill_color: str = WARM_WHITE,
+) -> None:
+    # Address cells explicitly: ``sheet[row_number]`` asks openpyxl for
+    # ``max_column``, which scans every cell of the sheet and turns row
+    # styling into an O(rows²) operation on large reports.
     sheet.row_dimensions[row_number].height = DATA_ROW_HEIGHT
-    fill = PatternFill("solid", fgColor=fill_color)
-    for cell in sheet[row_number]:
+    fill = _fill(fill_color)
+    for column in range(1, column_count + 1):
+        cell = sheet.cell(row_number, column)
         cell.fill = fill
-        cell.font = Font(color=TEXT, size=9)
-        cell.border = Border(bottom=ROW_BORDER)
-        cell.alignment = Alignment(vertical="center")
+        cell.font = DATA_FONT
+        cell.border = DATA_BORDER
+        cell.alignment = DATA_ALIGNMENT
 
 
 def _fit_columns(
@@ -143,9 +168,12 @@ def _fit_columns(
     maximum: int = 48,
     minimum: int = 10,
 ) -> None:
-    for column in range(1, sheet.max_column + 1):
+    # ``max_row``/``max_column`` are full scans in openpyxl; evaluate them once.
+    last_row = sheet.max_row
+    last_column = sheet.max_column
+    for column in range(1, last_column + 1):
         length = len(str(sheet.cell(header_row, column).value or ""))
-        for row in range(header_row + 1, sheet.max_row + 1):
+        for row in range(header_row + 1, last_row + 1):
             value = sheet.cell(row, column).value
             if value is not None:
                 line_lengths = [len(part) for part in str(value).splitlines()]
@@ -179,6 +207,7 @@ def _write_track_sheet(
         if "collection_warning" in fields
         else None
     )
+    warning_font = Font(color=CORAL_DARK, bold=True, size=9)
     for number, track in enumerate(tracks, start=1):
         row_number = DATA_START_ROW + number - 1
         values = [number] + [_safe(value) for value in track.table_row(fields)]
@@ -187,15 +216,14 @@ def _write_track_sheet(
         _style_data_row(
             sheet,
             row_number,
+            len(headers),
             status_colors.get(track.status.value, WARM_WHITE),
         )
-        sheet.cell(row_number, 1).alignment = Alignment(
-            horizontal="center", vertical="center"
-        )
+        sheet.cell(row_number, 1).alignment = CENTER_ALIGNMENT
         if warning_column and track.collection_warning:
             warning_cell = sheet.cell(row_number, warning_column)
-            warning_cell.fill = PatternFill("solid", fgColor=CORAL)
-            warning_cell.font = Font(color=CORAL_DARK, bold=True, size=9)
+            warning_cell.fill = _fill(CORAL)
+            warning_cell.font = warning_font
 
     sheet.column_dimensions["A"].width = 7
     _fit_columns(sheet)
@@ -242,12 +270,13 @@ def _write_matrix(
         cells[(track.base_title, track.relative_folder)].append(
             (track.status, marker)
         )
+    title_font = Font(color=TEXT, bold=True, size=9)
     for offset, title in enumerate(titles):
         row_number = DATA_START_ROW + offset
         sheet.cell(row_number, 1, _safe(title))
-        _style_data_row(sheet, row_number)
-        sheet.cell(row_number, 1).fill = PatternFill("solid", fgColor=LIGHT_ORANGE)
-        sheet.cell(row_number, 1).font = Font(color=TEXT, bold=True, size=9)
+        _style_data_row(sheet, row_number, len(headers))
+        sheet.cell(row_number, 1).fill = _fill(LIGHT_ORANGE)
+        sheet.cell(row_number, 1).font = title_font
         for column, folder in enumerate(folders, start=2):
             items = cells.get((title, folder))
             if not items:
@@ -264,9 +293,7 @@ def _write_matrix(
                 fill_color = status_colors[TrackStatus.VARIATION.value]
             else:
                 fill_color = status_colors[TrackStatus.DUPLICATE.value]
-            sheet.cell(row_number, column).fill = PatternFill(
-                "solid", fgColor=fill_color
-            )
+            sheet.cell(row_number, column).fill = _fill(fill_color)
 
     _fit_columns(sheet, maximum=55, minimum=14)
     _finish_table(sheet)
@@ -309,6 +336,8 @@ def _write_folder_summary(
         tab_color=GREEN_DARK,
     )
     status_colors = _status_colors(colors)
+    warning_font = Font(color=CORAL_DARK, bold=True, size=9)
+    ok_font = Font(color=GREEN_DARK, bold=True, size=9)
     for offset, folder in enumerate(sorted(grouped, key=str.casefold)):
         rows = grouped[folder]
         counts = Counter(track.status for track in rows)
@@ -335,31 +364,21 @@ def _write_folder_summary(
         row_number = DATA_START_ROW + offset
         for column, value in enumerate(values, start=1):
             sheet.cell(row_number, column, value)
-        _style_data_row(sheet, row_number)
-        sheet.cell(row_number, 3).fill = PatternFill(
-            "solid", fgColor=status_colors[TrackStatus.UNIQUE.value]
+        _style_data_row(sheet, row_number, len(headers))
+        sheet.cell(row_number, 3).fill = _fill(status_colors[TrackStatus.UNIQUE.value])
+        sheet.cell(row_number, 4).fill = _fill(
+            status_colors[TrackStatus.DUPLICATE.value]
         )
-        sheet.cell(row_number, 4).fill = PatternFill(
-            "solid", fgColor=status_colors[TrackStatus.DUPLICATE.value]
+        sheet.cell(row_number, 5).fill = _fill(
+            status_colors[TrackStatus.VARIATION.value]
         )
-        sheet.cell(row_number, 5).fill = PatternFill(
-            "solid", fgColor=status_colors[TrackStatus.VARIATION.value]
-        )
-        sheet.cell(row_number, 6).fill = PatternFill(
-            "solid", fgColor=status_colors[TrackStatus.CONFLICT.value]
-        )
+        sheet.cell(row_number, 6).fill = _fill(status_colors[TrackStatus.CONFLICT.value])
         completeness_cell = sheet.cell(row_number, 9)
-        completeness_cell.fill = PatternFill(
-            "solid", fgColor=CORAL if warnings else GREEN
-        )
-        completeness_cell.font = Font(
-            color=CORAL_DARK if warnings else GREEN_DARK,
-            bold=True,
-            size=9,
-        )
+        completeness_cell.fill = _fill(CORAL if warnings else GREEN)
+        completeness_cell.font = warning_font if warnings else ok_font
 
     counts = Counter(track.status for track in tracks)
-    total_row = sheet.max_row + 1
+    total_row = DATA_START_ROW + len(grouped)
     total_values = [
         "ИТОГО",
         len(tracks),
@@ -373,10 +392,13 @@ def _write_folder_summary(
     ]
     for column, value in enumerate(total_values, start=1):
         sheet.cell(total_row, column, value)
-    _style_data_row(sheet, total_row, LIGHT_ORANGE)
-    for cell in sheet[total_row]:
-        cell.font = Font(color=DARK_ORANGE, bold=True, size=9)
-        cell.border = Border(top=HEADER_BORDER, bottom=ROW_BORDER)
+    _style_data_row(sheet, total_row, len(headers), LIGHT_ORANGE)
+    total_font = Font(color=DARK_ORANGE, bold=True, size=9)
+    total_border = Border(top=HEADER_BORDER, bottom=ROW_BORDER)
+    for column in range(1, len(headers) + 1):
+        cell = sheet.cell(total_row, column)
+        cell.font = total_font
+        cell.border = total_border
 
     _fit_columns(sheet, maximum=52)
     _finish_table(sheet)
@@ -423,10 +445,11 @@ def _write_audit_sheet(
         AuditSeverity.INFO: GREEN,
     }
     severity_fonts = {
-        AuditSeverity.ERROR: CORAL_DARK,
-        AuditSeverity.WARNING: BLUE_DARK,
-        AuditSeverity.INFO: GREEN_DARK,
+        AuditSeverity.ERROR: Font(color=CORAL_DARK, bold=True, size=9),
+        AuditSeverity.WARNING: Font(color=BLUE_DARK, bold=True, size=9),
+        AuditSeverity.INFO: Font(color=GREEN_DARK, bold=True, size=9),
     }
+    fix_font = Font(color=GREEN_DARK, bold=True, size=9)
     for offset, issue in enumerate(issues):
         row_number = DATA_START_ROW + offset
         track = tracks_by_id.get(issue.track_id)
@@ -449,18 +472,14 @@ def _write_audit_sheet(
         _style_data_row(
             sheet,
             row_number,
+            len(headers),
             severity_fills[issue.severity],
         )
-        severity_cell = sheet.cell(row_number, 2)
-        severity_cell.font = Font(
-            color=severity_fonts[issue.severity],
-            bold=True,
-            size=9,
-        )
+        sheet.cell(row_number, 2).font = severity_fonts[issue.severity]
         if issue.safe_fix:
             fix_cell = sheet.cell(row_number, 9)
-            fix_cell.fill = PatternFill("solid", fgColor=GREEN)
-            fix_cell.font = Font(color=GREEN_DARK, bold=True, size=9)
+            fix_cell.fill = _fill(GREEN)
+            fix_cell.font = fix_font
     _fit_columns(sheet, maximum=60, minimum=11)
     sheet.column_dimensions["A"].width = 7
     _finish_table(sheet)

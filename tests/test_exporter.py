@@ -1,7 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from openpyxl import load_workbook
 
@@ -157,6 +157,32 @@ class ExporterTests(unittest.TestCase):
                 list(Path(directory).glob(".report-*.xlsx")),
                 [],
             )
+
+    def test_row_styling_does_not_scan_whole_sheet_per_row(self) -> None:
+        # ``sheet[row]`` asks openpyxl for ``max_column`` which walks every
+        # cell, turning a 50k-track report into an O(rows²) export.
+        tracks = [
+            track(f"t{index}", TrackStatus.UNIQUE, "Album") for index in range(40)
+        ]
+        with (
+            TemporaryDirectory() as directory,
+            patch(
+                "openpyxl.worksheet.worksheet.Worksheet.max_column",
+                new_callable=PropertyMock,
+                return_value=5,
+            ) as max_column,
+        ):
+            export_xlsx(
+                tracks,
+                Path(directory) / "scan.xlsx",
+                {"all": True},
+                ["base_title", "status", "relative_folder", "artist"],
+                {},
+            )
+
+        # A handful of calls for auto-filter/column fitting is fine; one call
+        # per data row is the regression we guard against.
+        self.assertLess(max_column.call_count, len(tracks))
 
     def test_audit_sheet_contains_issue_and_safe_fix_marker(self) -> None:
         item = track("one", TrackStatus.UNIQUE, "Album")
