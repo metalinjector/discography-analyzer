@@ -179,6 +179,40 @@ class MetadataTests(unittest.TestCase):
         )
         self.assertTrue(error)
 
+    def test_oversized_cover_is_a_cover_error_not_a_file_error(self) -> None:
+        import zlib
+
+        from mutagen.id3 import APIC, ID3, TIT2
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            crc = zlib.crc32(kind + payload) & 0xFFFFFFFF
+            return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+        # A PNG header claiming 30000x30000 pixels trips Pillow's
+        # decompression-bomb guard, which is not an OSError/ValueError.
+        bomb = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 30000, 30000, 8, 2, 0, 0, 0))
+            + chunk(b"IEND", b"")
+        )
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "song.mp3"
+            path.write_bytes(MP3_FRAMES)
+            tags = ID3()
+            tags.add(TIT2(encoding=3, text="Song"))
+            tags.add(APIC(encoding=3, mime="image/png", type=3, desc="", data=bomb))
+            tags.save(path)
+            item = make_track(path)
+
+            read_metadata(item)
+
+        self.assertEqual(item.title, "Song")
+        self.assertEqual(item.metadata_errors, [])
+        self.assertIn("exceeds limit", item.cover_error)
+        self.assertEqual(item.cover_size, len(bomb))
+        self.assertEqual((item.cover_width, item.cover_height), (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

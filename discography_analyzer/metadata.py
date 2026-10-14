@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 from .models import Track
 
@@ -111,7 +111,11 @@ def _cover_details(data: bytes, mime: str) -> tuple[str, int, str, int, int, str
         with Image.open(io.BytesIO(data)) as image:
             width, height = image.size
             image.verify()
-    except (OSError, ValueError, UnidentifiedImageError) as exc:
+    except Exception as exc:
+        # Pillow signals broken images with OSError/ValueError, but also with
+        # SyntaxError (truncated PNG chunks) and DecompressionBombError. Any
+        # of them is a *cover* problem and must not mark the whole file as
+        # unreadable - the tags were parsed fine.
         error = str(exc)
     return mime or "image/unknown", len(data), digest, width, height, error
 
