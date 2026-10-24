@@ -1,5 +1,20 @@
 # Changelog — Discography Analyzer
 
+## [25.10.2026] — Portable .exe (PyInstaller onefile + UPX)
+
+**Что сделано:**
+
+- `build_exe.spec`: one-file portable-сборка `Discography_Analyzer_1.7.0.exe` (tkinter-GUI, `console=False`, без внешних зависимостей).
+  Команда: `python -m PyInstaller --clean --noconfirm --upx-dir tools/upx/upx-4.2.4-win64 build_exe.spec`
+- `hiddenimports`: `collect_submodules('mutagen')` (его `File` — динамическая фабрика форматов), `collect_submodules('discography_analyzer')`, `collect_submodules('openpyxl')`.
+- `tools/upx/` (UPX 4.2.4 portable) добавлен в `.gitignore`.
+- Итог: `dist/Discography_Analyzer_1.7.0.exe`, **20 МБ**, 0 отсутствующих импортов в логе, UPX активен (279 строк лога).
+
+**Ошибка/решение:**
+
+- В спецификациях Qt-проектов `tkinter` принято исключать — здесь он фреймворк GUI, исключение сломало бы окно; в `excludes` добавлены только numpy/pandas/matplotlib/PyQt и пр.
+- Смоук-тест «как на ПК без Python»: запуск с PATH, из которого вычищены Python-пути → окно **«Discography Analyzer»** реально поднялось (ctls-проб EnumWindows), процесс завершился чисто (rc=0). PATH полностью обнулять нельзя — иначе теряются пути VC++ runtime (ложный отказ).
+
 ## [25.10.2026] — Влитие ветки аудита `arena/3512578b-discography-analyzer` в main
 
 Аудит проведён сторонним агентом (arena), перепроверен независимо перед вливанием.

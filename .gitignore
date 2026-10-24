@@ -28,3 +28,4 @@ htmlcov/
 
 # Project
 *.log
+tools/upx/
