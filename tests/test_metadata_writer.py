@@ -127,6 +127,48 @@ class MetadataWriterTests(unittest.TestCase):
             self.assertEqual(saved["TIT2"].text, ["Song"])
             self.assertEqual(item.artist, "Riana, Moby")
 
+    def test_fix_updates_the_key_the_value_was_read_from(self) -> None:
+        import struct
+
+        from mutagen.flac import FLAC
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Album" / "one.flac"
+            source.parent.mkdir()
+            # Minimal FLAC: "fLaC" + STREAMINFO (44.1 kHz, stereo, 16 bit, 1 s).
+            streaminfo = struct.pack(">HH", 4096, 4096) + b"\x00" * 6
+            bits = (44100 << 44) | (1 << 41) | (15 << 36) | 44100
+            streaminfo += bits.to_bytes(8, "big") + b"\x00" * 16
+            source.write_bytes(
+                b"fLaC"
+                + bytes([0x80])
+                + len(streaminfo).to_bytes(3, "big")
+                + streaminfo
+            )
+            tags = FLAC(source)
+            # foobar2000 writes "ALBUM ARTIST"; some taggers write YEAR, not DATE.
+            tags["ALBUM ARTIST"] = "Riana;Moby"
+            tags["YEAR"] = "2001 "
+            tags.save()
+
+            item = make_track("one")
+            item.root = root
+            item.path = source
+            item.filename = source.name
+
+            _write_verified_copy(
+                item,
+                {"album_artist": "Riana, Moby", "year": "2001"},
+                None,
+            )
+
+            saved = FLAC(source)
+            self.assertEqual(saved["ALBUM ARTIST"], ["Riana, Moby"])
+            self.assertEqual(saved["YEAR"], ["2001"])
+            self.assertNotIn("ALBUMARTIST", saved)
+            self.assertNotIn("DATE", saved)
+
     def test_issues_for_one_file_are_written_in_one_job(self) -> None:
         item = make_track("one")
         artist_issue = make_issue("artist", item.id)

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audit_models import MetadataAuditIssue
+from .metadata import RAW_FALLBACK_KEYS
 from .models import Track
 
 try:
@@ -78,6 +79,17 @@ def _save_options(path: Path) -> dict[str, int]:
     return {}
 
 
+def _target_key(tags, field: str) -> str:
+    """Update the key the reader took the value from instead of adding a new one."""
+    easy_key = EASY_TAG_KEYS[field]
+    if tags.get(easy_key) is not None:
+        return easy_key
+    return next(
+        (key for key in RAW_FALLBACK_KEYS.get(field, ()) if tags.get(key) is not None),
+        easy_key,
+    )
+
+
 def _write_verified_copy(
     track: Track,
     changes: dict[str, str],
@@ -106,19 +118,19 @@ def _write_verified_copy(
             if not callable(add_tags):
                 raise ValueError("формат не поддерживает создание тегов")
             add_tags()
+        keys = {field: _target_key(audio.tags, field) for field in changes}
         for field, value in changes.items():
-            key = EASY_TAG_KEYS[field]
-            audio[key] = [value]
+            audio[keys[field]] = [value]
         audio.save(**save_options)
 
         verified = mutagen.File(temporary, easy=True)
         if verified is None or getattr(verified, "tags", None) is None:
             raise ValueError("не удалось повторно прочитать записанные теги")
         for field, expected in changes.items():
-            values = _text_values(verified.tags.get(EASY_TAG_KEYS[field]))
+            values = _text_values(verified.tags.get(keys[field]))
             if not values or values[0] != expected:
                 raise ValueError(
-                    f"проверка тега {EASY_TAG_KEYS[field]} после записи не пройдена"
+                    f"проверка тега {keys[field]} после записи не пройдена"
                 )
 
         os.utime(
