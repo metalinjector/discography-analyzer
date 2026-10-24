@@ -481,8 +481,10 @@ def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
             track.cover_hash for track in group if track.cover_hash
         )
         if cover_counts:
-            dominant_cover, count = cover_counts.most_common(1)[0]
-            if count >= 2:
+            ranked = cover_counts.most_common(2)
+            dominant_cover, count = ranked[0]
+            second = ranked[1][1] if len(ranked) > 1 else 0
+            if count >= 2 and count > second:
                 source = next(
                     track for track in group if track.cover_hash == dominant_cover
                 )
