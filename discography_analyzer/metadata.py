@@ -39,6 +39,20 @@ EASY_FIELDS = {
     "comment": "comment",
     "description": "comment",
 }
+# Native keys of formats without an "easy" view (APEv2, some Vorbis
+# taggers such as foobar2000's "ALBUM ARTIST"). The metadata writer uses the
+# same list to update the key the value was actually read from.
+RAW_FALLBACK_KEYS = {
+    "title": ("Title", "TITLE"),
+    "artist": ("Artist", "ARTIST"),
+    "album": ("Album", "ALBUM"),
+    "album_artist": ("Album Artist", "ALBUMARTIST", "ALBUM ARTIST"),
+    "track_number": ("Track", "TRACK", "TRACKNUMBER"),
+    "disc_number": ("Disc", "DISC", "DISCNUMBER"),
+    "year": ("Year", "YEAR", "DATE"),
+    "genre": ("Genre", "GENRE"),
+    "comment": ("Comment", "COMMENT", "DESCRIPTION"),
+}
 
 
 def _as_text_list(value: Any) -> list[str]:
@@ -203,18 +217,7 @@ def read_metadata(track: Track) -> None:
                 setattr(track, attr, value)
 
         raw_tags = getattr(raw, "tags", None)
-        raw_fallbacks = {
-            "title": ("Title", "TITLE"),
-            "artist": ("Artist", "ARTIST"),
-            "album": ("Album", "ALBUM"),
-            "album_artist": ("Album Artist", "ALBUMARTIST", "ALBUM ARTIST"),
-            "track_number": ("Track", "TRACK", "TRACKNUMBER"),
-            "disc_number": ("Disc", "DISC", "DISCNUMBER"),
-            "year": ("Year", "YEAR", "DATE"),
-            "genre": ("Genre", "GENRE"),
-            "comment": ("Comment", "COMMENT", "DESCRIPTION"),
-        }
-        for attr, keys in raw_fallbacks.items():
+        for attr, keys in RAW_FALLBACK_KEYS.items():
             if not getattr(track, attr):
                 values = _values_any(raw_tags, keys)
                 if values and attr not in track.canonical_tags:
