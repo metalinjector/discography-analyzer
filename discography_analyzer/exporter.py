@@ -6,6 +6,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -51,10 +52,12 @@ def _fill(color: str) -> PatternFill:
 
 
 def _safe(value: Any) -> Any:
-    if (
-        isinstance(value, str)
-        and value.lstrip().startswith(("=", "+", "-", "@"))
-    ):
+    if not isinstance(value, str):
+        return value
+    # One control character in any tag must not abort the whole report:
+    # openpyxl raises IllegalCharacterError for them.
+    value = ILLEGAL_CHARACTERS_RE.sub("", value)
+    if value.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
 

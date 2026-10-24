@@ -132,6 +132,24 @@ class ExporterTests(unittest.TestCase):
                 "'  =HYPERLINK(\"https://example.invalid\")",
             )
 
+    def test_control_characters_do_not_abort_export(self) -> None:
+        dirty_track = track("dirty", TrackStatus.UNIQUE, "(корень)")
+        dirty_track.title = "Song\x01Name"
+        # Removing the character must not let a formula slip through.
+        dirty_track.artist = "\x0c=1+1"
+        with TemporaryDirectory() as directory:
+            path = export_xlsx(
+                [dirty_track],
+                Path(directory) / "dirty.xlsx",
+                {"all": True},
+                ["title", "artist"],
+                {},
+            )
+
+            sheet = load_workbook(path)["Все треки"]
+            self.assertEqual(sheet.cell(5, 2).value, "SongName")
+            self.assertEqual(sheet.cell(5, 3).value, "'=1+1")
+
     def test_failed_export_preserves_existing_report(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "report.xlsx"
