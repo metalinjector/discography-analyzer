@@ -32,8 +32,14 @@ from .constants import (
 from .copy_dialog import UniqueCopyDialog
 from .exporter import export_xlsx
 from .metadata import MetadataDependencyError, read_embedded_cover
-from .models import AlbumCompletenessIssue, AnalysisResult, Track, TrackStatus
-from .parsing import validate_markers
+from .models import (
+    AlbumCompletenessIssue,
+    AnalysisResult,
+    Track,
+    TrackStatus,
+    album_completeness_text,
+)
+from .parsing import files_word, validate_markers
 from .scanner import (
     AnalysisStopped,
     NoAudioFilesError,
@@ -41,6 +47,7 @@ from .scanner import (
     analyze_collection,
 )
 from .settings import AppSettings
+from .utilities_dialog import UtilitiesDialog, UtilityContext
 
 TABLE_FIELD_IDS = [item[0] for item in TABLE_COLUMNS]
 
@@ -585,7 +592,35 @@ class DiscographyAnalyzerApp:
             self.tree.column("#0", width=width, stretch=False)
 
     def _open_utilities(self) -> None:
-        messagebox.showinfo(APP_NAME, "В разработке", parent=self.root)
+        root_folder: Path | None = None
+        if self.folder_var.get().strip():
+            root_folder = Path(self.folder_var.get())
+        elif self.result is not None:
+            root_folder = self.result.root
+        context = UtilityContext(
+            root_folder=root_folder,
+            include_subfolders=self.include_subfolders_var.get(),
+            excluded_folders=tuple(self.settings.excluded_folders),
+            # Utilities cover the whole collection, so every format the app
+            # understands is processed even if the analysis filter hides it.
+            extensions=frozenset(SUPPORTED_FORMATS.values()),
+            on_completed=self._utility_completed,
+        )
+        dialog = UtilitiesDialog(self.root, context)
+        self._style_toplevel(dialog.window)
+
+    def _utility_completed(self, changed_root: Path) -> None:
+        """Re-run the analysis so the table and the audit see the new covers."""
+        if self.result is None:
+            return
+        analysed_root = self.result.root
+        try:
+            changed_root.resolve().relative_to(analysed_root.resolve())
+        except ValueError:
+            return
+        if self.worker and self.worker.is_alive():
+            return
+        self.start_analysis()
 
     def apply_theme(self) -> None:
         dark = self.dark_theme_var.get()
@@ -1372,7 +1407,7 @@ class DiscographyAnalyzerApp:
             group_id = "group::" + min(member.id for member in members)
             base_title = representative.base_title or representative.filename_title
             count = len(members)
-            label = f"{group_kind}: {base_title} · {count} {_files_word(count)}"
+            label = f"{group_kind}: {base_title} · {count} {files_word(count)}"
             folders = {member.relative_folder for member in members}
             variations = sorted(
                 {member.variation for member in members if member.variation}
@@ -1998,26 +2033,7 @@ class DiscographyAnalyzerApp:
         self._load_cover(track, self.cover_label, 190)
 
     def _show_issue_in_panel(self, issue: AlbumCompletenessIssue) -> None:
-        lines = [
-            "ПРОВЕРКА КОМПЛЕКТА АЛЬБОМА",
-            f"Папка: {issue.relative_folder}",
-            f"Album: {issue.album or '—'}",
-            f"Диск: {issue.disc}",
-            f"Найдены номера: {', '.join(map(str, issue.present_numbers))}",
-            f"Ожидаемое количество: {issue.expected_total}",
-            f"Источник ожидаемого количества: "
-            f"{'теги Track # и найденная последовательность' if issue.total_from_tags else 'последний найденный номер'}",
-            f"Результат: {issue.short_text}",
-        ]
-        if issue.unnumbered_files:
-            lines.extend(
-                [
-                    "",
-                    "Файлы без номера Track #:",
-                    *[f"• {filename}" for filename in issue.unnumbered_files],
-                ]
-            )
-        self._set_text(self.info_text, "\n".join(lines))
+        self._set_text(self.info_text, album_completeness_text(issue))
         self.cover_photo = None
         self.cover_label.configure(image="", text="Для проверки папки\nобложка не требуется")
 

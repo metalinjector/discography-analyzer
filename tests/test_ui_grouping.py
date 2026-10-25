@@ -5,9 +5,9 @@ from unittest.mock import patch
 
 from discography_analyzer.constants import TABLE_COLUMNS
 from discography_analyzer.models import Track, TrackStatus
+from discography_analyzer.parsing import files_word
 from discography_analyzer.ui import (
     DiscographyAnalyzerApp,
-    _files_word,
     _responsive_group_width,
 )
 
@@ -102,7 +102,7 @@ class UiGroupingTests(unittest.TestCase):
             111: "файлов",
         }
         self.assertEqual(
-            {count: _files_word(count) for count in expected},
+            {count: files_word(count) for count in expected},
             expected,
         )
 

@@ -23,6 +23,7 @@ def make_track(
     artist: str = "Moby",
     album_artist: str = "Moby",
     track_number: str = "1/1",
+    disc_number: str = "1/1",
 ) -> Track:
     path = folder / f"{identifier}.flac"
     return Track(
@@ -40,6 +41,7 @@ def make_track(
         album_artist=album_artist,
         year="2009",
         track_number=track_number,
+        disc_number=disc_number,
         duration_exact=180.0,
         duration_seconds=180,
         cover_hash="cover-a",
@@ -187,6 +189,76 @@ class MetadataAuditTests(unittest.TestCase):
             for issue in issues
             if issue.message.startswith("Обложка отличается")
         ]
+
+    def test_declared_total_below_highest_number_is_reported_per_file(self) -> None:
+        # Real «Christmas & Chill» case: six files keep TRACKTOTAL=6 from the
+        # 6-track edition, the seventh declares 7/7.
+        with TemporaryDirectory() as directory:
+            folder = Path(directory) / "Album"
+            folder.mkdir()
+            tracks = [
+                make_track(
+                    str(number),
+                    folder,
+                    track_number=f"{number}/6" if number < 7 else "7/7",
+                )
+                for number in range(1, 8)
+            ]
+            issues = audit_metadata(tracks)
+
+        total_issues = [
+            issue for issue in issues if issue.message.startswith("Итог Track #")
+        ]
+        self.assertEqual(len(total_issues), 6)
+        self.assertEqual(
+            {issue.track_id for issue in total_issues},
+            {str(number) for number in range(1, 7)},
+        )
+        self.assertTrue(
+            all(issue.severity == AuditSeverity.WARNING for issue in total_issues)
+        )
+        self.assertTrue(all(not issue.fixable for issue in total_issues))
+        self.assertEqual(total_issues[0].current_value, "1/6")
+        self.assertEqual(total_issues[0].suggested_value, "1/7")
+        self.assertIn("на диске (7)", total_issues[0].message)
+
+    def test_equal_totals_produce_no_total_warning(self) -> None:
+        with TemporaryDirectory() as directory:
+            folder = Path(directory) / "Album"
+            folder.mkdir()
+            tracks = [
+                make_track(str(number), folder, track_number=f"{number}/7")
+                for number in range(1, 8)
+            ]
+            issues = audit_metadata(tracks)
+
+        self.assertFalse(
+            any(issue.message.startswith("Итог Track #") for issue in issues)
+        )
+
+    def test_multi_disc_totals_are_checked_per_disc(self) -> None:
+        # Disc 1 declares 10 tracks, disc 2 declares 12: two different totals in
+        # one album are normal for a multi-disc set and must not be flagged.
+        with TemporaryDirectory() as directory:
+            folder = Path(directory) / "Album"
+            folder.mkdir()
+            tracks = [
+                make_track(f"d1-{number}", folder, track_number=f"{number}/10")
+                for number in (1, 2, 3)
+            ] + [
+                make_track(
+                    f"d2-{number}",
+                    folder,
+                    track_number=f"{number}/12",
+                    disc_number="2/2",
+                )
+                for number in (1, 2)
+            ]
+            issues = audit_metadata(tracks)
+
+        self.assertFalse(
+            any(issue.message.startswith("Итог Track #") for issue in issues)
+        )
 
     def test_cover_tie_has_no_dominant_cover_warning(self) -> None:
         self.assertEqual(

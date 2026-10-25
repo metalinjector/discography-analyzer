@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import shutil
-import tempfile
 import threading
 from collections import defaultdict
 from collections.abc import Callable
@@ -10,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audit_models import MetadataAuditIssue
+from .fileops import backup_copy, replace_preserving_times, temporary_copy
 from .metadata import RAW_FALLBACK_KEYS
 from .models import Track
 
@@ -54,17 +52,6 @@ def _text_values(value) -> list[str]:
         return [str(value)]
 
 
-def _available_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    counter = 2
-    while True:
-        candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
-        if not candidate.exists():
-            return candidate
-        counter += 1
-
-
 def _save_options(path: Path) -> dict[str, int]:
     """Keep ID3v2.3 files at v2.3 instead of silently upgrading them to v2.4.
 
@@ -98,17 +85,9 @@ def _write_verified_copy(
     if mutagen is None:
         raise RuntimeError("Не установлена библиотека Mutagen")
     source = track.path
-    source_stat = source.stat()
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{source.stem}-audit-",
-        suffix=source.suffix,
-        dir=source.parent,
-    )
-    os.close(descriptor)
-    temporary = Path(temporary_name)
+    temporary = temporary_copy(source, prefix=f".{source.stem}-audit-")
     backup_created = False
     try:
-        shutil.copy2(source, temporary)
         save_options = _save_options(temporary)
         audio = mutagen.File(temporary, easy=True)
         if audio is None:
@@ -133,20 +112,10 @@ def _write_verified_copy(
                     f"проверка тега {keys[field]} после записи не пройдена"
                 )
 
-        os.utime(
-            temporary,
-            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
-        )
         if backup_root is not None:
-            try:
-                relative = source.relative_to(track.root)
-            except ValueError:
-                relative = Path(source.name)
-            backup = _available_path(backup_root / relative)
-            backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, backup)
+            backup_copy(source, track.root, backup_root)
             backup_created = True
-        os.replace(temporary, source)
+        replace_preserving_times(temporary, source)
         for field, value in changes.items():
             setattr(track, field, value)
             track.canonical_tags[field] = [value]

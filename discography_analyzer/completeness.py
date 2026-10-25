@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from .models import AlbumCompletenessIssue, Track
 
@@ -48,6 +48,8 @@ def analyze_track_completeness(
     for (_folder, _album_key, disc), group in groups.items():
         numbered: dict[int, list[Track]] = defaultdict(list)
         totals: set[int] = set()
+        # One total per file: «6» six times and «7» once, not just {6, 7}.
+        total_files: Counter[int] = Counter()
         unnumbered: list[Track] = []
         for track in group:
             number, total = parse_position(track.track_number)
@@ -57,6 +59,7 @@ def analyze_track_completeness(
             numbered[number].append(track)
             if total is not None and total > 0:
                 totals.add(total)
+                total_files[total] += 1
 
         if not numbered:
             continue
@@ -86,6 +89,7 @@ def analyze_track_completeness(
             total_from_tags=bool(totals),
             unnumbered_files=tuple(track.filename for track in unnumbered),
             inconsistent_totals=inconsistent_totals,
+            total_counts=tuple(sorted(total_files.items())),
         )
         issues.append(issue)
         for track in group:

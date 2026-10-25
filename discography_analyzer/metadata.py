@@ -142,11 +142,11 @@ def _front_picture(pictures: list[Any]) -> Any:
     )
 
 
-def _embedded_cover(audio: Any, path: Path) -> tuple[bytes, str] | None:
+def embedded_cover(audio: Any, path: Path) -> tuple[bytes, str] | None:
     """Return ``(data, mime)`` of the embedded cover shared by audit and UI.
 
-    One code path guarantees the preview shows exactly the picture whose
-    hash and dimensions the metadata audit reasoned about.
+    One code path guarantees the preview, the metadata audit and the cover
+    utility all reason about exactly the same picture.
     """
     if FLAC is not None and isinstance(audio, FLAC) and audio.pictures:
         picture = _front_picture(audio.pictures)
@@ -183,7 +183,7 @@ def _extract_cover_details(
     audio: Any,
     path: Path,
 ) -> tuple[str, int, str, int, int, str]:
-    cover = _embedded_cover(audio, path)
+    cover = embedded_cover(audio, path)
     if cover is None:
         return "", 0, "", 0, 0, ""
     return _cover_details(*cover)
@@ -332,7 +332,7 @@ def read_embedded_cover(path: Path) -> tuple[bytes | None, str, str]:
         audio = mutagen.File(path, easy=False)
         if audio is None:
             return None, "", "Формат файла не распознан"
-        cover = _embedded_cover(audio, path)
+        cover = embedded_cover(audio, path)
         if cover is None:
             return None, "", ""
         return cover[0], cover[1], ""
