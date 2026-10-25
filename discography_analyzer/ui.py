@@ -445,6 +445,7 @@ class DiscographyAnalyzerApp:
             bottom,
             text="Исправить нумерацию...",
             command=self.open_numbering_fix,
+            style="Numbering.TButton",
         )
         self.numbering_fix_button.grid(row=0, column=3, padx=(6, 0))
         self.numbering_fix_button.grid_remove()
@@ -456,8 +457,10 @@ class DiscographyAnalyzerApp:
         ttk.Button(bottom, text="Открыть файл", command=self.open_selected_file).grid(
             row=0, column=5
         )
-        ttk.Label(bottom, textvariable=self.statistics_var, anchor="e").grid(
-            row=0, column=6, sticky="e"
+        # Its own row: with the numbering button the summary no longer fits
+        # next to the actions and was clipped at the window edge.
+        ttk.Label(bottom, textvariable=self.statistics_var, anchor="w").grid(
+            row=1, column=0, columnspan=7, sticky="ew", pady=(7, 0)
         )
 
         self.context_menu = tk.Menu(self.root, tearoff=False)
@@ -652,6 +655,8 @@ class DiscographyAnalyzerApp:
         field = "#24272a" if dark else "#ffffff"
         toolbar = "#30353a" if dark else "#f7f3ed"
         header = "#3b4147" if dark else "#4b5158"
+        header_active = "#4a5158" if dark else "#5a6168"
+        header_pressed = "#2f353a" if dark else "#3e444a"
         fg = "#f4efe8" if dark else "#2f3439"
         border = "#555b61" if dark else "#c9c5bf"
         orange = "#df7724" if dark else "#d96813"
@@ -750,6 +755,28 @@ class DiscographyAnalyzerApp:
                 ("active", selected_fg),
                 ("pressed", selected_fg),
                 ("disabled", disabled_fg),
+            ],
+        )
+        # Same dark grey as the column headers, white text - used for the
+        # «Исправить нумерацию» action so it reads as a companion of the table.
+        self.style.configure(
+            "Numbering.TButton",
+            background=header,
+            foreground="#ffffff",
+            bordercolor=header,
+            lightcolor=header,
+            darkcolor=header_pressed,
+            font=("TkDefaultFont", 9, "bold"),
+        )
+        self.style.map(
+            "Numbering.TButton",
+            background=[
+                ("pressed", header_pressed),
+                ("active", header_active),
+            ],
+            foreground=[
+                ("pressed", "#ffffff"),
+                ("active", "#ffffff"),
             ],
         )
         self.style.configure(
@@ -1560,6 +1587,7 @@ class DiscographyAnalyzerApp:
                 text=f"[+] {label}",
                 values=self._row_values(
                     status=f"Ошибок {errors} · предупреждений {warnings}",
+                    track_number=track.track_number,
                     base_title=track.album or track.base_title,
                     variation=f"Безопасных исправлений: {safe_fixes}",
                     relation="Нажмите [+], чтобы показать замечания",
@@ -1588,6 +1616,7 @@ class DiscographyAnalyzerApp:
                     text=issue.message,
                     values=self._row_values(
                         status=issue.severity.decorated,
+                        track_number=track.track_number,
                         base_title=issue.category.value,
                         variation=issue.field_label,
                         relation=relation or "—",

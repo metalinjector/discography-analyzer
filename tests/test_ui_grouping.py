@@ -206,7 +206,10 @@ class UiGroupingTests(unittest.TestCase):
 
         app._capture_column_widths()
 
-        self.assertEqual(app._column_widths["base_title"], 101)
+        expected = 100 + [
+            column_id for column_id, _heading, _width in TABLE_COLUMNS
+        ].index("base_title")
+        self.assertEqual(app._column_widths["base_title"], expected)
         self.assertTrue(app.tree.stretch)
         self.assertTrue(all(not value for value in app.tree.stretch.values()))
 
@@ -355,6 +358,42 @@ class UiGroupingTests(unittest.TestCase):
         self.assertEqual(app.info_text.text, "Выберите трек в таблице")
         self.assertIsNone(app.cover_photo)
         self.assertEqual(app.cover_label.options["text"], "Обложка не выбрана")
+
+    def test_track_number_is_second_column_and_sorts_numerically(self) -> None:
+        self.assertEqual(TABLE_COLUMNS[1][0], "track_number")
+
+        def make(identifier: str, number: str) -> Track:
+            path = Path(f"/music/{identifier}.flac")
+            return Track(
+                id=identifier,
+                path=path,
+                root=Path("/music"),
+                filename=path.name,
+                relative_path=identifier,
+                relative_folder="A",
+                format="FLAC",
+                size_bytes=1,
+                track_number=number,
+            )
+
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        tracks = [
+            make("ten", "10/10"),
+            make("two", "2/10"),
+            make("one", "1/10"),
+            make("none", ""),
+        ]
+
+        ordered = [
+            track.id
+            for track in sorted(
+                tracks, key=lambda track: app._sort_key(track, "track_number")
+            )
+        ]
+
+        # 2 must come before 10 (string sorting would put 10 first), and a file
+        # without a number must land at the end.
+        self.assertEqual(ordered, ["one", "two", "ten", "none"])
 
     def test_folder_tree_can_expand_and_collapse_in_one_action(self) -> None:
         class FakeTab:
