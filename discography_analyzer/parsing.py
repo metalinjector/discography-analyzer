@@ -20,6 +20,24 @@ def title_from_filename(filename: str) -> str:
     return TRACK_PREFIX_RE.sub("", stem, count=1).strip()
 
 
+def files_word(count: int) -> str:
+    """Russian plural of «файл» for the given count."""
+    if count % 10 == 1 and count % 100 != 11:
+        return "файл"
+    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return "файла"
+    return "файлов"
+
+
+def folders_word(count: int) -> str:
+    """Russian plural of «папка» for the given count."""
+    if count % 10 == 1 and count % 100 != 11:
+        return "папка"
+    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return "папки"
+    return "папок"
+
+
 def artist_set(artist: str) -> set[str]:
     if not artist or not artist.strip():
         return set()

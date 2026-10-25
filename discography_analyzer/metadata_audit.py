@@ -421,6 +421,40 @@ def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
                     current=track.track_number,
                 )
 
+        # A declared total below the highest number found on the same disc is a
+        # definite contradiction (the tags claim 6 tracks while track 7 exists).
+        # Checked per disc: multi-disc sets legitimately declare different
+        # totals. Reported per file without a mechanical fix — whether the
+        # extra track belongs to the release is the user's decision.
+        totals_by_disc: dict[int, list[tuple[Track, int, int]]] = defaultdict(list)
+        numbers_by_disc: dict[int, list[int]] = defaultdict(list)
+        for track in group:
+            disc, _disc_total = parse_position(track.disc_number)
+            number, total = parse_position(track.track_number)
+            if number is None:
+                continue
+            numbers_by_disc[disc or 1].append(number)
+            if total is not None:
+                totals_by_disc[disc or 1].append((track, number, total))
+        for key, entries in totals_by_disc.items():
+            highest = max(numbers_by_disc[key])
+            for track, number, total in entries:
+                if total >= highest:
+                    continue
+                add(
+                    track,
+                    AuditSeverity.WARNING,
+                    AuditCategory.NUMBERING,
+                    "track_number",
+                    (
+                        "Итог Track # меньше найденного номера "
+                        f"на диске ({highest})"
+                    ),
+                    current=f"{number}/{total}",
+                    suggested=f"{number}/{highest}",
+                    confidence=AuditConfidence.LOW,
+                )
+
         album_artists = [
             track.album_artist for track in group if track.album_artist.strip()
         ]

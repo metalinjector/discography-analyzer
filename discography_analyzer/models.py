@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit_models import AuditSeverity, MetadataAuditIssue
+from .parsing import files_word
 
 
 class TrackStatus(str, Enum):
@@ -174,6 +175,8 @@ class AlbumCompletenessIssue:
     total_from_tags: bool
     unnumbered_files: tuple[str, ...] = ()
     inconsistent_totals: tuple[int, ...] = ()
+    # (total, file count) pairs: which totals the files actually declare.
+    total_counts: tuple[tuple[int, int], ...] = ()
 
     @property
     def context(self) -> str:
@@ -185,22 +188,87 @@ class AlbumCompletenessIssue:
         return " · ".join(parts)
 
     @property
+    def totals_summary(self) -> str:
+        """«6, 7» — the conflicting totals, compact enough for a table cell."""
+        return ", ".join(str(total) for total in self.inconsistent_totals)
+
+    @property
+    def total_breakdown_text(self) -> str:
+        """«6 (6 файлов), 7 (1 файл)» — totals with the number of files each."""
+        if not self.total_counts:
+            return self.totals_summary
+        return ", ".join(
+            f"{total} ({count} {files_word(count)})"
+            for total, count in self.total_counts
+        )
+
+    @property
     def short_text(self) -> str:
         details: list[str] = []
         if self.missing_numbers:
             numbers = ", ".join(str(number) for number in self.missing_numbers)
             details.append(f"пропущены № {numbers}")
-        if self.total_from_tags:
-            details.append(f"ожидается {self.expected_total}")
         if self.unnumbered_files:
             details.append(f"без Track #: {len(self.unnumbered_files)}")
         if self.inconsistent_totals:
-            totals = ", ".join(str(number) for number in self.inconsistent_totals)
-            if len(self.inconsistent_totals) == 1:
-                details.append(f"итог в теге противоречит номерам: {totals}")
+            if len(self.inconsistent_totals) > 1:
+                # The table/export cell keeps only the totals; the card and the
+                # audit tab carry the per-file detail.
+                details.append(f"итоги в тегах: {self.totals_summary}")
             else:
-                details.append(f"разные итоги в тегах: {totals}")
-        return "⚠ " + "; ".join(details)
+                # A single total that contradicts the numbers found.
+                details.append(
+                    "итог в теге меньше номера: "
+                    f"{self.inconsistent_totals[0]} < {max(self.present_numbers)}"
+                )
+        elif self.total_from_tags and (self.missing_numbers or self.unnumbered_files):
+            # Without missing or unnumbered files there is nothing to expect.
+            details.append(f"ожидается {self.expected_total}")
+        prefix = ""
+        if self.inconsistent_totals and not (
+            self.missing_numbers or self.unnumbered_files
+        ):
+            # Nothing is missing: the album is complete and only its declared
+            # totals contradict each other. Saying «ожидается N» here read as a
+            # missing track and sent users to the wrong place.
+            prefix = "комплект полный; "
+        return "⚠ " + prefix + "; ".join(details)
+
+
+def album_completeness_text(issue: AlbumCompletenessIssue) -> str:
+    """Text of the completeness card shown in the info panel."""
+    numbers = ", ".join(str(number) for number in issue.present_numbers) or "—"
+    lines = [
+        "ПРОВЕРКА КОМПЛЕКТА АЛЬБОМА",
+        f"Папка: {issue.relative_folder}",
+        f"Album: {issue.album or '—'}",
+        f"Диск: {issue.disc}",
+        f"Найдены номера: {numbers}",
+    ]
+    if issue.missing_numbers or issue.unnumbered_files:
+        source = (
+            "теги Track # и найденная последовательность"
+            if issue.total_from_tags
+            else "последний найденный номер"
+        )
+        lines.extend(
+            [
+                f"Ожидаемое количество: {issue.expected_total}",
+                f"Источник ожидаемого количества: {source}",
+            ]
+        )
+    if issue.inconsistent_totals:
+        lines.append(f"Итог в тегах: {issue.total_breakdown_text}")
+    lines.append(f"Результат: {issue.short_text}")
+    if issue.unnumbered_files:
+        lines.extend(
+            [
+                "",
+                "Файлы без номера Track #:",
+                *[f"• {filename}" for filename in issue.unnumbered_files],
+            ]
+        )
+    return "\n".join(lines)
 
 
 @dataclass(slots=True)
