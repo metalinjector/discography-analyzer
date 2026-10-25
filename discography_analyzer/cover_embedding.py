@@ -24,7 +24,7 @@ from pathlib import Path
 from PIL import Image
 
 from .fileops import backup_copy, replace_preserving_times, temporary_copy
-from .metadata import embedded_cover, read_embedded_cover
+from .metadata import embedded_cover, id3_save_options, read_embedded_cover
 from .metadata_audit import EXTERNAL_COVER_STEMS, EXTERNAL_COVER_SUFFIXES
 
 try:
@@ -416,13 +416,6 @@ def _flac_picture(cover: CoverImage) -> Picture:
     return picture
 
 
-def _id3_save_options(tags: ID3) -> dict[str, int]:
-    version = getattr(tags, "version", None)
-    if isinstance(version, tuple) and tuple(version[:2]) == (2, 3):
-        return {"v2_version": 3}
-    return {}
-
-
 def _ape_payload(cover: CoverImage) -> bytes:
     # APEv2 stores the picture as "file name" + NUL + binary image data.
     return cover.path.name.encode("utf-8") + b"\x00" + cover.data
@@ -471,7 +464,7 @@ def write_cover(path: Path, cover: CoverImage) -> None:
                 data=cover.data,
             )
         )
-        audio.save(**_id3_save_options(tags))
+        audio.save(**id3_save_options(tags))
         return
     if APEv2 is not None and isinstance(tags, APEv2):
         tags[APE_COVER_KEY] = APEValue(_ape_payload(cover), BINARY)

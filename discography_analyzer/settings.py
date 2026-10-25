@@ -72,6 +72,7 @@ class AppSettings:
     check_track_gaps: bool = True
     include_subfolders: bool = True
     folder_tree_mode: bool = False
+    backup_before_tag_writes: bool = True
     dark_theme: bool = True
     formats: dict[str, bool] = field(
         default_factory=lambda: dict.fromkeys(SUPPORTED_FORMATS, True)

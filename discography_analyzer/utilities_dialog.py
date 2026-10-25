@@ -40,6 +40,8 @@ class UtilityContext:
     include_subfolders: bool
     excluded_folders: tuple[str, ...]
     extensions: frozenset[str]
+    backup_enabled: bool
+    on_backup_changed: Callable[[bool], None]
     on_completed: Callable[[Path], None]
 
 
@@ -93,7 +95,7 @@ class CoverEmbeddingPanel(UtilityPanel):
             value=self.context.include_subfolders
         )
         self.replace_broken_var = tk.BooleanVar(value=False)
-        self.backup_enabled_var = tk.BooleanVar(value=True)
+        self.backup_enabled_var = tk.BooleanVar(value=self.context.backup_enabled)
         self.backup_path_var = tk.StringVar(
             value=self._default_backup_path(self.context.root_folder)
         )
@@ -181,7 +183,7 @@ class CoverEmbeddingPanel(UtilityPanel):
         backup.columnconfigure(1, weight=1)
         ttk.Checkbutton(
             backup,
-            text="Создать перед изменением",
+            text="Делать резервную копию перед записью",
             variable=self.backup_enabled_var,
             command=self._backup_state_changed,
         ).grid(row=0, column=0, padx=(0, 8))
@@ -193,6 +195,10 @@ class CoverEmbeddingPanel(UtilityPanel):
             backup, text="Выбрать...", command=self._choose_backup
         )
         self.backup_button.grid(row=0, column=2, padx=(8, 0))
+        backup_state = "normal" if self.backup_enabled_var.get() else "disabled"
+        entry_state = "readonly" if self.backup_enabled_var.get() else "disabled"
+        self.backup_button.configure(state=backup_state)
+        self.backup_entry.configure(state=entry_state)
 
         progress_holder = ttk.Frame(self.frame)
         progress_holder.grid(row=3, column=0, sticky="ew")
@@ -266,9 +272,11 @@ class CoverEmbeddingPanel(UtilityPanel):
             self.backup_path_var.set(chosen)
 
     def _backup_state_changed(self) -> None:
-        self.backup_button.configure(
-            state="normal" if self.backup_enabled_var.get() else "disabled"
-        )
+        enabled = self.backup_enabled_var.get()
+        self.backup_button.configure(state="normal" if enabled else "disabled")
+        self.backup_entry.configure(state="readonly" if enabled else "disabled")
+        # The choice is a user preference: both tag writers remember it.
+        self.context.on_backup_changed(enabled)
 
     def _invalidate_plan(self) -> None:
         self.plan = None
@@ -402,12 +410,18 @@ class CoverEmbeddingPanel(UtilityPanel):
                 )
                 return
         plan = self.plan
+        backup_note = (
+            "Резервные копии будут созданы."
+            if backup_root is not None
+            else "Резервные копии отключены."
+        )
         confirmed = messagebox.askyesno(
             WINDOW_TITLE,
             f"Встроить обложку в {plan.target_count} "
             f"{files_word(plan.target_count)} в {plan.folder_count} "
             f"{folders_word(plan.folder_count)}?\n\n"
-            "Теги файлов будут изменены. Само аудио не перекодируется.",
+            "Теги файлов будут изменены. Само аудио не перекодируется.\n"
+            f"{backup_note}",
             parent=self.frame,
         )
         if not confirmed:
