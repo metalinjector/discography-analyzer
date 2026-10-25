@@ -1178,10 +1178,16 @@ class DiscographyAnalyzerApp:
         }
         self._restore_buttons()
         self.unique_copy_button.configure(state="normal")
+        self._reset_sort_to_track_number()
         self.refresh_table()
         self._update_statistics()
         self._sync_settings_from_ui()
         self._autosave()
+
+    def _reset_sort_to_track_number(self) -> None:
+        """A fresh scan is shown in track order: 1, 2, 3 … regardless of titles."""
+        self.sort_column = "track_number"
+        self.sort_reverse = False
 
     def _clear_results(self) -> None:
         """Drop the previous analysis from memory and from every widget."""

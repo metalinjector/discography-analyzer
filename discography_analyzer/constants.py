@@ -85,7 +85,7 @@ STATUS_ROW_COLORS_DARK = {
 
 TABLE_COLUMNS = [
     ("status", "Статус", 125),
-    ("track_number", "№ трека (m/n)", 95),
+    ("track_number", "№ трека (m/n)", 115),
     ("base_title", "Базовое имя", 220),
     ("variation", "Вариация", 130),
     ("relation", "Связь с файлами", 300),
