@@ -88,7 +88,9 @@ class DiscographyAnalyzerApp:
         self._folder_column_width: int | None = None
         self._column_widths: dict[str, int] = {}
         self._filter_job: str | None = None
-        self.current_tab = tk.StringVar(value="all")
+        # Default view: the folder tree, where album numbering and the
+        # completeness warnings are easiest to read.
+        self.current_tab = tk.StringVar(value="folders")
         self.filter_var = tk.StringVar()
         self.issue_by_id: dict[str, AlbumCompletenessIssue] = {}
         self.audit_issue_by_id: dict[str, MetadataAuditIssue] = {}
@@ -1178,10 +1180,16 @@ class DiscographyAnalyzerApp:
         }
         self._restore_buttons()
         self.unique_copy_button.configure(state="normal")
+        self._reset_sort_to_track_number()
         self.refresh_table()
         self._update_statistics()
         self._sync_settings_from_ui()
         self._autosave()
+
+    def _reset_sort_to_track_number(self) -> None:
+        """A fresh scan is shown in track order: 1, 2, 3 … regardless of titles."""
+        self.sort_column = "track_number"
+        self.sort_reverse = False
 
     def _clear_results(self) -> None:
         """Drop the previous analysis from memory and from every widget."""

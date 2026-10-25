@@ -213,6 +213,16 @@ class UiGroupingTests(unittest.TestCase):
         self.assertTrue(app.tree.stretch)
         self.assertTrue(all(not value for value in app.tree.stretch.values()))
 
+    def test_fresh_analysis_starts_with_track_number_order(self) -> None:
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.sort_column = "title"
+        app.sort_reverse = True
+
+        app._reset_sort_to_track_number()
+
+        self.assertEqual(app.sort_column, "track_number")
+        self.assertFalse(app.sort_reverse)
+
     def test_filter_typing_is_debounced(self) -> None:
         class FakeRoot:
             def __init__(self) -> None:

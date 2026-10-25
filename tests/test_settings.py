@@ -24,6 +24,9 @@ class SettingsTests(unittest.TestCase):
             self.assertFalse(restored.check_track_gaps)
             self.assertTrue(restored.folder_tree_mode)
 
+    def test_folder_tree_is_enabled_by_default(self) -> None:
+        self.assertTrue(AppSettings().folder_tree_mode)
+
     def test_disabled_remember_folder_does_not_persist_path(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
@@ -57,7 +60,8 @@ class SettingsTests(unittest.TestCase):
             restored = AppSettings.load(path)
 
             self.assertTrue(restored.dark_theme)
-            self.assertFalse(restored.folder_tree_mode)
+            # An invalid value falls back to the default, which is now the tree.
+            self.assertTrue(restored.folder_tree_mode)
             self.assertEqual(restored.variation_markers, ["Live"])
             self.assertEqual(restored.excluded_folders, ["Temp"])
             self.assertTrue(restored.formats["MP3"])
