@@ -988,6 +988,14 @@ class DiscographyAnalyzerApp:
             foreground="#fff1ef" if dark else "#7a2e27",
             font=("TkDefaultFont", 9, "bold"),
         )
+        # A folder whose release is missing files according to the tags: dark
+        # red, almost burgundy, so it is visible without opening the folder.
+        self.tree.tag_configure(
+            "FolderGap",
+            background="#5a1c1c" if dark else "#591a1a",
+            foreground="#ffe9e7" if dark else "#fff2f0",
+            font=("TkDefaultFont", 9, "bold"),
+        )
         audit_colors = {
             "AuditGroup": (
                 "#41474d" if dark else "#e5e7e9",
@@ -1708,6 +1716,16 @@ class DiscographyAnalyzerApp:
             return ()
         return tuple(part for part in Path(relative_folder).parts if part not in (".", ""))
 
+    def _folders_with_missing_numbers(self) -> set[tuple[str, ...]]:
+        """Folders whose release is short of files according to the tags."""
+        if not self.result:
+            return set()
+        return {
+            self._folder_parts(issue.relative_folder)
+            for issue in self.result.completeness_issues
+            if issue.missing_numbers
+        }
+
     def _insert_folder_tree(self, tracks: list[Track]) -> None:
         if not self.result:
             return
@@ -1720,13 +1738,15 @@ class DiscographyAnalyzerApp:
         )
         root_id = "folder-root::node"
         root_name = self.result.root.name or str(self.result.root)
+        folders_with_gaps = self._folders_with_missing_numbers()
+        root_tags = ("Folder", "FolderGap") if () in folders_with_gaps else ("Folder",)
         self.tree.insert(
             "",
             "end",
             iid=root_id,
             text=f"📁 {root_name}",
             values=self._row_values(status=f"Папка · {len(tracks)} файлов"),
-            tags=("Folder",),
+            tags=root_tags,
             open=True,
         )
         folder_ids: dict[tuple[str, ...], str] = {(): root_id}
@@ -1737,13 +1757,18 @@ class DiscographyAnalyzerApp:
             parent_parts = parts[:-1]
             parent = ensure_folder(parent_parts)
             item_id = "folder-path::" + "/".join(parts)
+            tags = (
+                ("Folder", "FolderGap")
+                if parts in folders_with_gaps
+                else ("Folder",)
+            )
             self.tree.insert(
                 parent,
                 "end",
                 iid=item_id,
                 text=f"📁 {parts[-1]}",
                 values=self._row_values(status="Папка"),
-                tags=("Folder",),
+                tags=tags,
                 open=True,
             )
             folder_ids[parts] = item_id
