@@ -168,6 +168,38 @@ class MetadataAuditTests(unittest.TestCase):
             any("повторяется" in issue.message for issue in issues)
         )
 
+    def _cover_mismatch_track_ids(self, cover_hashes: list[str]) -> list[str]:
+        with TemporaryDirectory() as directory:
+            folder = Path(directory) / "Album"
+            folder.mkdir()
+            tracks = []
+            for number, cover_hash in enumerate(cover_hashes, start=1):
+                item = make_track(
+                    f"t{number}",
+                    folder,
+                    track_number=f"{number}/{len(cover_hashes)}",
+                )
+                item.cover_hash = cover_hash
+                tracks.append(item)
+            issues = audit_metadata(tracks)
+        return [
+            issue.track_id
+            for issue in issues
+            if issue.message.startswith("Обложка отличается")
+        ]
+
+    def test_cover_tie_has_no_dominant_cover_warning(self) -> None:
+        self.assertEqual(
+            self._cover_mismatch_track_ids(["a", "a", "b", "b"]),
+            [],
+        )
+
+    def test_cover_unique_leader_still_warns(self) -> None:
+        self.assertEqual(
+            self._cover_mismatch_track_ids(["a", "a", "a", "b"]),
+            ["t4"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
