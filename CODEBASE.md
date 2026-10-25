@@ -1,8 +1,8 @@
 # Discography Analyzer 1.7.0 — код проекта
 
-Полное древо проекта с чистым исходным кодом и пояснением к каждому файлу-узлу. Версия 1.7.0, коммит `37947e4`, Python ≥3.10, зависимости: mutagen, openpyxl, Pillow. GUI — чистый tkinter/ttk, без внешних GUI-фреймворков.
+Полное древо проекта с чистым исходным кодом и пояснением к каждому файлу-узлу. Версия 1.7.0, коммит `513b087`, Python ≥3.10, зависимости: mutagen, openpyxl, Pillow. GUI — чистый tkinter/ttk, без внешних GUI-фреймворков.
 
-Кода: **26 файлов, 6632 строк**.
+Кода: **26 файлов, 6652 строк**.
 
 ## Древо проекта
 
@@ -19,10 +19,10 @@ Discography_Analyzer_Python (GPT 5.6 Sol)/
 │   ├── constants.py — константы, форматы, маркеры (130 стр.)
 │   ├── copy_dialog.py — диалог копирования (428 стр.)
 │   ├── copying.py — план и исполнение копирования (349 стр.)
-│   ├── exporter.py — экспорт XLSX (5 листов) (556 стр.)
-│   ├── metadata.py — чтение тегов и обложек (mutagen) (337 стр.)
-│   ├── metadata_audit.py — правила аудита тегов (511 стр.)
-│   ├── metadata_writer.py — безопасные правки тегов (193 стр.)
+│   ├── exporter.py — экспорт XLSX (5 листов) (559 стр.)
+│   ├── metadata.py — чтение тегов и обложек (mutagen) (340 стр.)
+│   ├── metadata_audit.py — правила аудита тегов (513 стр.)
+│   ├── metadata_writer.py — безопасные правки тегов (205 стр.)
 │   ├── models.py — доменные модели (Track и др.) (226 стр.)
 │   ├── parsing.py — парсинг имён файлов (96 стр.)
 │   ├── scanner.py — сбор файлов, пайплайн анализа (176 стр.)
@@ -745,7 +745,7 @@ def analyze_collection(
 
 ### `discography_analyzer/metadata.py`
 
-Чтение тегов через mutagen — самый насыщенный модуль данных. Easy-представление + raw (FLAC/APE парсятся один раз — у них нет easy-обёртки); маппинг полей с fallback-ключами; кадры `COMM:<desc>:<lang>` → поле «Комментарий» (технические iTunNORM не трогаются); позиции трек/диск с тоталами; обложки — единый `_embedded_cover()` для аудита и предпросмотра, валидация картинки через Pillow (`cover_error` ≠ `metadata_errors`: битая обложка не делает весь файл «ошибкой метаданных»); техполя из `info` (битрейт, частота, глубина, кодек…); `all_tags` — полная карта сырых тегов для инфо-панели.
+Чтение тегов через mutagen — самый насыщенный модуль данных. Easy-представление + raw (FLAC/APE парсятся один раз — у них нет easy-обёртки); маппинг полей с fallback-ключами; кадры `COMM:<desc>:<lang>` → поле «Комментарий» (технические iTunNORM не трогаются); позиции трек/диск с тоталами; обложки — единый `_embedded_cover()` для аудита и предпросмотра, валидация картинки через Pillow (`cover_error` ≠ `metadata_errors`: битая обложка не делает весь файл «ошибкой метаданных»); техполя из `info` (битрейт, частота, глубина, кодек…); `all_tags` — полная карта сырых тегов для инфо-панели; `RAW_FALLBACK_KEYS` — модульная константа «родных» ключей форматов без easy-обёртки, переиспользуется `metadata_writer` для записи в ключ, из которого значение прочитано.
 
 ```python
 from __future__ import annotations
@@ -788,6 +788,20 @@ EASY_FIELDS = {
     "genre": "genre",
     "comment": "comment",
     "description": "comment",
+}
+# Native keys of formats without an "easy" view (APEv2, some Vorbis
+# taggers such as foobar2000's "ALBUM ARTIST"). The metadata writer uses the
+# same list to update the key the value was actually read from.
+RAW_FALLBACK_KEYS = {
+    "title": ("Title", "TITLE"),
+    "artist": ("Artist", "ARTIST"),
+    "album": ("Album", "ALBUM"),
+    "album_artist": ("Album Artist", "ALBUMARTIST", "ALBUM ARTIST"),
+    "track_number": ("Track", "TRACK", "TRACKNUMBER"),
+    "disc_number": ("Disc", "DISC", "DISCNUMBER"),
+    "year": ("Year", "YEAR", "DATE"),
+    "genre": ("Genre", "GENRE"),
+    "comment": ("Comment", "COMMENT", "DESCRIPTION"),
 }
 
 
@@ -953,18 +967,7 @@ def read_metadata(track: Track) -> None:
                 setattr(track, attr, value)
 
         raw_tags = getattr(raw, "tags", None)
-        raw_fallbacks = {
-            "title": ("Title", "TITLE"),
-            "artist": ("Artist", "ARTIST"),
-            "album": ("Album", "ALBUM"),
-            "album_artist": ("Album Artist", "ALBUMARTIST", "ALBUM ARTIST"),
-            "track_number": ("Track", "TRACK", "TRACKNUMBER"),
-            "disc_number": ("Disc", "DISC", "DISCNUMBER"),
-            "year": ("Year", "YEAR", "DATE"),
-            "genre": ("Genre", "GENRE"),
-            "comment": ("Comment", "COMMENT", "DESCRIPTION"),
-        }
-        for attr, keys in raw_fallbacks.items():
+        for attr, keys in RAW_FALLBACK_KEYS.items():
             if not getattr(track, attr):
                 values = _values_any(raw_tags, keys)
                 if values and attr not in track.canonical_tags:
@@ -1544,7 +1547,7 @@ class MetadataAuditIssue:
 
 ### `discography_analyzer/metadata_audit.py`
 
-Правила аудита тегов → список `MetadataAuditIssue`: разделители артистов («A;B» → «A, B»), повторные разделители («A;;B»), лишние пробелы и контрольные символы, отсутствующие обязательные поля, встроенная обложка (в т.ч. поиск внешнего cover.jpg рядом с файлом), доминирующие значения по коллекции, подозрительная длительность/битрейт. Каждое ишьюс несёт `suggested_value` для безопасного фикса; severity от ERROR до INFO.
+Правила аудита тегов → список `MetadataAuditIssue`: разделители артистов («A;B» → «A, B»), повторные разделители («A;;B»), лишние пробелы и контрольные символы, отсутствующие обязательные поля, встроенная обложка (в т.ч. поиск внешнего cover.jpg рядом с файлом), доминирующие значения по коллекции, подозрительная длительность/битрейт. «Доминирующая обложка» альбома требует строгого перевеса (`count > second`): при ничьей хешей (A,A,B,B) ложных предупреждений нет. Каждое ишьюс несёт `suggested_value` для безопасного фикса; severity от ERROR до INFO.
 
 ```python
 from __future__ import annotations
@@ -2030,8 +2033,10 @@ def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
             track.cover_hash for track in group if track.cover_hash
         )
         if cover_counts:
-            dominant_cover, count = cover_counts.most_common(1)[0]
-            if count >= 2:
+            ranked = cover_counts.most_common(2)
+            dominant_cover, count = ranked[0]
+            second = ranked[1][1] if len(ranked) > 1 else 0
+            if count >= 2 and count > second:
                 source = next(
                     track for track in group if track.cover_hash == dominant_cover
                 )
@@ -2063,7 +2068,7 @@ def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
 
 ### `discography_analyzer/metadata_writer.py`
 
-Применение «безопасных исправлений» тегов: копия во временный файл → правка easy-тегов → перечитывание с проверкой → атомарная замена исходника. Версия контейнера ID3v2.3 сохраняется (`v2_version=3` — mutagen по умолчанию переписал бы как v2.4, что ломает проводник Windows и автомагнитолы). Бэкапы и защита от перезаписи существующих.
+Применение «безопасных исправлений» тегов: копия во временный файл → правка easy-тегов → перечитывание с проверкой → атомарная замена исходника. `_target_key` пишет значение в тот ключ, из которого оно прочитано (easy-ключ, а при его отсутствии «родной» ключ из `RAW_FALLBACK_KEYS` — например, `ALBUM ARTIST` у foobar2000 или `YEAR` во FLAC/APE), не создавая рядом второй противоречащий ключ. Версия контейнера ID3v2.3 сохраняется (`v2_version=3` — mutagen по умолчанию переписал бы как v2.4, что ломает проводник Windows и автомагнитолы). Бэкапы и защита от перезаписи существующих.
 
 ```python
 from __future__ import annotations
@@ -2078,6 +2083,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .audit_models import MetadataAuditIssue
+from .metadata import RAW_FALLBACK_KEYS
 from .models import Track
 
 try:
@@ -2146,6 +2152,17 @@ def _save_options(path: Path) -> dict[str, int]:
     return {}
 
 
+def _target_key(tags, field: str) -> str:
+    """Update the key the reader took the value from instead of adding a new one."""
+    easy_key = EASY_TAG_KEYS[field]
+    if tags.get(easy_key) is not None:
+        return easy_key
+    return next(
+        (key for key in RAW_FALLBACK_KEYS.get(field, ()) if tags.get(key) is not None),
+        easy_key,
+    )
+
+
 def _write_verified_copy(
     track: Track,
     changes: dict[str, str],
@@ -2174,19 +2191,19 @@ def _write_verified_copy(
             if not callable(add_tags):
                 raise ValueError("формат не поддерживает создание тегов")
             add_tags()
+        keys = {field: _target_key(audio.tags, field) for field in changes}
         for field, value in changes.items():
-            key = EASY_TAG_KEYS[field]
-            audio[key] = [value]
+            audio[keys[field]] = [value]
         audio.save(**save_options)
 
         verified = mutagen.File(temporary, easy=True)
         if verified is None or getattr(verified, "tags", None) is None:
             raise ValueError("не удалось повторно прочитать записанные теги")
         for field, expected in changes.items():
-            values = _text_values(verified.tags.get(EASY_TAG_KEYS[field]))
+            values = _text_values(verified.tags.get(keys[field]))
             if not values or values[0] != expected:
                 raise ValueError(
-                    f"проверка тега {EASY_TAG_KEYS[field]} после записи не пройдена"
+                    f"проверка тега {keys[field]} после записи не пройдена"
                 )
 
         os.utime(
@@ -2621,7 +2638,7 @@ def execute_copy_plan(
 
 ### `discography_analyzer/exporter.py`
 
-Экспорт XLSX через openpyxl: 5 листов — «Все треки», «Только дубликаты», «Матрица дубликатов» (папки × названия), «Сводка по папкам», «Аудит метаданных». Стили: заливки по статусам, шрифты, границы, автоподбор ширины; общие неизменяемые объекты стилей и явная адресация `sheet.cell(row, col)` — экспорт линеен по числу строк (после фикса аудита O(n²) убран). Запись через временный файл + `os.replace`; формулы защищены апострофом.
+Экспорт XLSX через openpyxl: 5 листов — «Все треки», «Только дубликаты», «Матрица дубликатов» (папки × названия), «Сводка по папкам», «Аудит метаданных». Стили: заливки по статусам, шрифты, границы, автоподбор ширины; общие неизменяемые объекты стилей и явная адресация `sheet.cell(row, col)` — экспорт линеен по числу строк (после фикса аудита O(n²) убран). `_safe()` вырезает запрещённые для XLSX управляющие символы (`ILLEGAL_CHARACTERS_RE` из openpyxl) до защиты от формул — один `\x01` в теге не обрывает сохранение всего отчёта. Запись через временный файл + `os.replace`; формулы защищены апострофом.
 
 ```python
 from __future__ import annotations
@@ -2632,6 +2649,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -2677,10 +2695,12 @@ def _fill(color: str) -> PatternFill:
 
 
 def _safe(value: Any) -> Any:
-    if (
-        isinstance(value, str)
-        and value.lstrip().startswith(("=", "+", "-", "@"))
-    ):
+    if not isinstance(value, str):
+        return value
+    # One control character in any tag must not abort the whole report:
+    # openpyxl raises IllegalCharacterError for them.
+    value = ILLEGAL_CHARACTERS_RE.sub("", value)
+    if value.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
 
