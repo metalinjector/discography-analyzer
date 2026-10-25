@@ -89,6 +89,7 @@ TABLE_COLUMNS = [
     ("variation", "Вариация", 130),
     ("relation", "Связь с файлами", 300),
     ("collection_warning", "Проверка комплекта", 260),
+    ("track_number", "№ трека (m/n)", 95),
     ("relative_folder", "Папка", 180),
     ("title", "Title", 200),
     ("artist", "Artist", 180),

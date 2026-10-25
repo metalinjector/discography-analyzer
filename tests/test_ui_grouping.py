@@ -298,9 +298,16 @@ class UiGroupingTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.options: dict[str, object] = {}
                 self.text = "old info"
+                self.hidden = False
 
             def configure(self, **values) -> None:
                 self.options.update(values)
+
+            def grid_remove(self) -> None:
+                self.hidden = True
+
+            def entryconfigure(self, *_args, **_kwargs) -> None:
+                pass
 
             def delete(self, *_args) -> None:
                 self.text = ""
@@ -323,6 +330,8 @@ class UiGroupingTests(unittest.TestCase):
         app.shown_count_var = FakeValue("12 из 12")
         app.unique_copy_button = FakeWidget()
         app.audit_fix_button = FakeWidget()
+        app.numbering_fix_button = FakeWidget()
+        app.context_menu = FakeWidget()
         app.info_text = FakeWidget()
         app.cover_label = FakeWidget()
         app.cover_photo = object()

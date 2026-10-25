@@ -26,6 +26,12 @@ def parse_position(value: str) -> tuple[int | None, int | None]:
     return number, total
 
 
+def album_group_key(track: Track) -> tuple[str, str, int]:
+    """Folder + album + disc: the unit used by the completeness check."""
+    disc, _disc_total = parse_position(track.disc_number)
+    return (track.relative_folder, track.album.strip().casefold(), disc or 1)
+
+
 def analyze_track_completeness(
     tracks: list[Track],
 ) -> list[AlbumCompletenessIssue]:
@@ -36,13 +42,7 @@ def analyze_track_completeness(
 
     groups: dict[tuple[str, str, int], list[Track]] = defaultdict(list)
     for track in tracks:
-        disc, _disc_total = parse_position(track.disc_number)
-        key = (
-            track.relative_folder,
-            track.album.strip().casefold(),
-            disc or 1,
-        )
-        groups[key].append(track)
+        groups[album_group_key(track)].append(track)
 
     issues: list[AlbumCompletenessIssue] = []
     for (_folder, _album_key, disc), group in groups.items():

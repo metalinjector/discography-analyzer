@@ -189,6 +189,63 @@ def _extract_cover_details(
     return _cover_details(*cover)
 
 
+POSITION_TOTAL_KEYS = ("tracktotal", "totaltracks", "totaltrack")
+DISC_TOTAL_KEYS = ("disctotal", "totaldiscs", "totaldisc")
+RAW_TRACK_TOTAL_KEYS = ("TrackTotal", "TRACKTOTAL", "TOTALTRACKS")
+RAW_DISC_TOTAL_KEYS = ("DiscTotal", "DISCTOTAL", "TOTALDISCS")
+
+
+def read_positions(
+    easy_tags: Any,
+    raw_tags: Any,
+    audio: Any,
+) -> tuple[str, str]:
+    """Return merged ``Track #`` and ``Disc #`` exactly as the analysis sees them.
+
+    The numbering fixer verifies its writes with this function, so a fix can
+    never produce a value the analysis would interpret differently.
+    """
+    track_number = _first(easy_tags, "tracknumber") or _first_any(
+        raw_tags, RAW_FALLBACK_KEYS["track_number"]
+    )
+    disc_number = _first(easy_tags, "discnumber") or _first_any(
+        raw_tags, RAW_FALLBACK_KEYS["disc_number"]
+    )
+    track_total = _first_any(easy_tags, POSITION_TOTAL_KEYS) or _first_any(
+        raw_tags, RAW_TRACK_TOTAL_KEYS
+    )
+    disc_total = _first_any(easy_tags, DISC_TOTAL_KEYS) or _first_any(
+        raw_tags, RAW_DISC_TOTAL_KEYS
+    )
+    # MP4 stores positions as numeric tuples in the raw trkn/disk atoms.
+    if MP4 is not None and isinstance(audio, MP4) and raw_tags:
+        for key, kind in (("trkn", "track"), ("disk", "disc")):
+            values = raw_tags.get(key, [])
+            if not values or not isinstance(values[0], tuple) or not values[0]:
+                continue
+            number = values[0][0]
+            total = values[0][1] if len(values[0]) > 1 else 0
+            if not number:
+                continue
+            text = f"{number}/{total}" if total else str(number)
+            if kind == "track":
+                track_number = text
+            else:
+                disc_number = text
+    return (
+        _merge_position(track_number, track_total),
+        _merge_position(disc_number, disc_total),
+    )
+
+
+def id3_save_options(tags: Any) -> dict[str, int]:
+    """Keep an ID3v2.3 container at v2.3 instead of silently upgrading it."""
+    version = getattr(tags, "version", None)
+    if isinstance(version, tuple) and tuple(version[:2]) == (2, 3):
+        return {"v2_version": 3}
+    return {}
+
+
 def read_metadata(track: Track) -> None:
     if mutagen is None:
         raise MetadataDependencyError(
@@ -242,28 +299,9 @@ def read_metadata(track: Track) -> None:
                 track.canonical_tags.setdefault("comment", values)
                 track.comment = "; ".join(values).strip()
 
-        track_total = _first_any(
-            easy_tags, ("tracktotal", "totaltracks", "totaltrack")
-        ) or _first_any(raw_tags, ("TrackTotal", "TRACKTOTAL", "TOTALTRACKS"))
-        disc_total = _first_any(
-            easy_tags, ("disctotal", "totaldiscs", "totaldisc")
-        ) or _first_any(raw_tags, ("DiscTotal", "DISCTOTAL", "TOTALDISCS"))
-
-        # MP4 stores positions as numeric tuples in the raw trkn/disk atoms.
-        if MP4 is not None and isinstance(raw, MP4) and raw_tags:
-            for key, attr in (("trkn", "track_number"), ("disk", "disc_number")):
-                values = raw_tags.get(key, [])
-                if values and isinstance(values[0], tuple):
-                    number = values[0][0] if values[0] else 0
-                    total = values[0][1] if len(values[0]) > 1 else 0
-                    if number:
-                        setattr(
-                            track,
-                            attr,
-                            f"{number}/{total}" if total else str(number),
-                        )
-        track.track_number = _merge_position(track.track_number, track_total)
-        track.disc_number = _merge_position(track.disc_number, disc_total)
+        track.track_number, track.disc_number = read_positions(
+            easy_tags, raw_tags, raw
+        )
 
         info = getattr(raw, "info", None)
         if info is not None:

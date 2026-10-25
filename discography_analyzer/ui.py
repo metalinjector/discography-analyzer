@@ -17,7 +17,7 @@ from PIL import Image, ImageTk, UnidentifiedImageError
 
 from .audit_dialog import AuditFixDialog
 from .audit_models import AuditSeverity, MetadataAuditIssue
-from .completeness import parse_position
+from .completeness import album_group_key, parse_position
 from .constants import (
     APP_NAME,
     DEFAULT_REPORT_COLORS,
@@ -39,6 +39,8 @@ from .models import (
     TrackStatus,
     album_completeness_text,
 )
+from .numbering_dialog import NumberingFixDialog
+from .numbering_fix import NumberingPlan, plan_numbering_fix
 from .parsing import files_word, validate_markers
 from .scanner import (
     AnalysisStopped,
@@ -91,6 +93,7 @@ class DiscographyAnalyzerApp:
         self.issue_by_id: dict[str, AlbumCompletenessIssue] = {}
         self.audit_issue_by_id: dict[str, MetadataAuditIssue] = {}
         self.audit_item_track_ids: dict[str, str] = {}
+        self._numbering_plan: NumberingPlan | None = None
 
         self.root.title(APP_NAME)
         screen_width = self.root.winfo_screenwidth()
@@ -389,7 +392,11 @@ class DiscographyAnalyzerApp:
             show="headings",
             selectmode="extended",
         )
-        self.tree.heading("#0", text="Структура папок")
+        self.tree.heading(
+            "#0",
+            text="Структура папок",
+            command=lambda: self.sort_by("#0"),
+        )
         self.tree.column("#0", width=0, minwidth=0, stretch=False)
         for column_id, heading, width in TABLE_COLUMNS:
             self.tree.heading(
@@ -411,7 +418,7 @@ class DiscographyAnalyzerApp:
 
         bottom = ttk.Frame(self.root, padding=12)
         bottom.grid(row=5, column=0, sticky="ew")
-        bottom.columnconfigure(5, weight=1)
+        bottom.columnconfigure(6, weight=1)
         ttk.Button(
             bottom,
             text="Экспорт в XLSX",
@@ -432,16 +439,25 @@ class DiscographyAnalyzerApp:
             state="disabled",
         )
         self.audit_fix_button.grid(row=0, column=2, padx=(6, 0))
+        # Shown only while the selection points at a group whose Track # totals
+        # contradict the found numbering.
+        self.numbering_fix_button = ttk.Button(
+            bottom,
+            text="Исправить нумерацию...",
+            command=self.open_numbering_fix,
+        )
+        self.numbering_fix_button.grid(row=0, column=3, padx=(6, 0))
+        self.numbering_fix_button.grid_remove()
         ttk.Button(
             bottom,
             text="Копировать в буфер",
             command=self.copy_selected,
-        ).grid(row=0, column=3, padx=6)
+        ).grid(row=0, column=4, padx=6)
         ttk.Button(bottom, text="Открыть файл", command=self.open_selected_file).grid(
-            row=0, column=4
+            row=0, column=5
         )
         ttk.Label(bottom, textvariable=self.statistics_var, anchor="e").grid(
-            row=0, column=5, sticky="e"
+            row=0, column=6, sticky="e"
         )
 
         self.context_menu = tk.Menu(self.root, tearoff=False)
@@ -456,6 +472,11 @@ class DiscographyAnalyzerApp:
         )
         self.context_menu.add_command(
             label="Показать исходный трек", command=self.open_source_track
+        )
+        self.context_menu.add_command(
+            label="Исправить нумерацию...",
+            command=self.open_numbering_fix,
+            state="disabled",
         )
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Копировать путь", command=self.copy_path)
@@ -604,6 +625,8 @@ class DiscographyAnalyzerApp:
             # Utilities cover the whole collection, so every format the app
             # understands is processed even if the analysis filter hides it.
             extensions=frozenset(SUPPORTED_FORMATS.values()),
+            backup_enabled=self.settings.backup_before_tag_writes,
+            on_backup_changed=self._set_backup_preference,
             on_completed=self._utility_completed,
         )
         dialog = UtilitiesDialog(self.root, context)
@@ -1147,6 +1170,9 @@ class DiscographyAnalyzerApp:
         self.shown_count_var.set("0 из 0")
         self.unique_copy_button.configure(state="disabled")
         self.audit_fix_button.configure(state="disabled")
+        self._numbering_plan = None
+        self.numbering_fix_button.grid_remove()
+        self.context_menu.entryconfigure("Исправить нумерацию...", state="disabled")
         self._clear_info()
 
     def _analysis_stopped(self) -> None:
@@ -1258,6 +1284,7 @@ class DiscographyAnalyzerApp:
             f"{len(self.visible_tracks)} из {len(self.result.tracks)}"
         )
         self._refresh_headings()
+        self._refresh_numbering_button()
 
     def _tree_mode_changed(self) -> None:
         self.settings.folder_tree_mode = self.folder_tree_mode_var.get()
@@ -1358,7 +1385,14 @@ class DiscographyAnalyzerApp:
             entries.append((representative, members))
 
         def entry_sort_key(entry: tuple[Track, list[Track]]):
-            representative = entry[0]
+            representative, members = entry
+            if self.sort_column == "#0":
+                # Same text the row shows: «Дубликаты: <название> · N файлов».
+                group_kind, _tag = self._group_kind(members)
+                base_title = (
+                    representative.base_title or representative.filename_title
+                )
+                return f"{group_kind}: {base_title}".casefold()
             if self.sort_column:
                 return self._sort_key(
                     representative, self.sort_column or ""
@@ -1700,7 +1734,11 @@ class DiscographyAnalyzerApp:
                 iid=f"issue::{issue.id}",
                 text=f"⚠ {label}",
                 values=self._row_values(
-                    status="⚠ Пропуски",
+                    status=(
+                        "⚠ Нумерация"
+                        if issue.inconsistent_totals and not issue.missing_numbers
+                        else "⚠ Пропуски"
+                    ),
                     collection_warning=issue.short_text,
                     album=issue.album,
                     relative_folder=issue.relative_folder,
@@ -1714,6 +1752,15 @@ class DiscographyAnalyzerApp:
             self._insert_track_row(parent, track)
 
     def _sort_key(self, track: Track, column: str):
+        if column in ("track_number", "#0"):
+            number, _total = parse_position(track.track_number)
+            if column == "#0":
+                return (
+                    number is None,
+                    number or 0,
+                    track.filename.casefold(),
+                )
+            return (number is None, number or 0)
         numeric = {
             "duration": track.duration_seconds,
             "bitrate": track.bitrate,
@@ -1734,6 +1781,16 @@ class DiscographyAnalyzerApp:
         self.refresh_table()
 
     def _refresh_headings(self) -> None:
+        if self.current_tab.get() == "audit":
+            zero_title = "Файлы и замечания"
+        elif self.current_tab.get() == "folders" and self.folder_tree_mode_var.get():
+            zero_title = "Структура папок"
+        else:
+            zero_title = "Группы и файлы"
+        zero_arrow = ""
+        if self.sort_column == "#0":
+            zero_arrow = " ▼" if self.sort_reverse else " ▲"
+        self.tree.heading("#0", text=zero_title + zero_arrow)
         audit_headings = {
             "status": "Уровень",
             "base_title": "Категория",
@@ -1786,6 +1843,7 @@ class DiscographyAnalyzerApp:
         return None
 
     def _selection_changed(self, _event=None) -> None:
+        self._refresh_numbering_button()
         focused = self.tree.focus()
         if focused.startswith("audit-issue::"):
             audit_issue = self.audit_issue_by_id.get(
@@ -2067,6 +2125,7 @@ class DiscographyAnalyzerApp:
         track = self.track_by_id.get(track_id)
         state = "normal" if track and track.source_track_id else "disabled"
         self.context_menu.entryconfigure("Показать исходный трек", state=state)
+        self._refresh_numbering_button()
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
     def _open_path(self, path: Path) -> None:
@@ -2151,6 +2210,118 @@ class DiscographyAnalyzerApp:
             self.start_analysis,
         )
         self._style_toplevel(dialog.window)
+
+    def open_numbering_fix(self) -> None:
+        if not self.result:
+            return
+        issues = self._numbering_issues_for_selection()
+        if not issues:
+            return
+        plan = plan_numbering_fix(self.result.tracks, issues)
+        if not plan.changes:
+            messagebox.showinfo(
+                APP_NAME,
+                "Итоги Track # уже согласованы — исправлять нечего",
+                parent=self.root,
+            )
+            return
+        dialog = NumberingFixDialog(
+            self.root,
+            plan,
+            self.result.root,
+            backup_enabled=self.settings.backup_before_tag_writes,
+            on_backup_changed=self._set_backup_preference,
+            on_completed=self.start_analysis,
+        )
+        self._style_toplevel(dialog.window)
+
+    def _folder_parts_from_tree_id(self, item_id: str) -> tuple[str, ...] | None:
+        if item_id == "folder-root::node":
+            return ()
+        if item_id.startswith("folder-path::"):
+            return tuple(
+                part
+                for part in item_id.removeprefix("folder-path::").split("/")
+                if part
+            )
+        return None
+
+    def _numbering_issues_for_selection(self) -> list[AlbumCompletenessIssue]:
+        """Completeness issues with conflicting totals for the focused row."""
+        if not self.result:
+            return []
+        focused = self.tree.focus()
+        if not focused:
+            return []
+        issues = [
+            issue
+            for issue in self.result.completeness_issues
+            if issue.inconsistent_totals
+        ]
+        if not issues:
+            return []
+        if focused.startswith("issue::"):
+            issue = self.issue_by_id.get(focused.removeprefix("issue::"))
+            return [issue] if issue in issues else []
+        if focused.startswith("folder-"):
+            parts = self._folder_parts_from_tree_id(focused)
+            if parts is None:
+                return []
+            return [
+                issue
+                for issue in issues
+                if self._folder_parts(issue.relative_folder) == parts
+            ]
+        track_id = self.audit_item_track_ids.get(focused, focused)
+        if focused.startswith("audit-issue::"):
+            audit_issue = self.audit_issue_by_id.get(
+                focused.removeprefix("audit-issue::")
+            )
+            track_id = audit_issue.track_id if audit_issue else ""
+        elif self.group_members.get(focused):
+            track_id = self.group_members[focused][0]
+        track = self.track_by_id.get(track_id)
+        if track is None:
+            return []
+        key = album_group_key(track)
+        return [
+            issue
+            for issue in issues
+            if (
+                issue.relative_folder,
+                issue.album.strip().casefold(),
+                issue.disc,
+            )
+            == key
+        ]
+
+    def _refresh_numbering_button(self) -> None:
+        """Show the fix button only when the focused row has conflicting totals."""
+        issues = self._numbering_issues_for_selection()
+        plan = (
+            plan_numbering_fix(self.result.tracks, issues)
+            if self.result and issues
+            else None
+        )
+        self._numbering_plan = plan if plan and plan.count else None
+        if self._numbering_plan is not None:
+            self.numbering_fix_button.configure(
+                text=f"Исправить нумерацию ({self._numbering_plan.count})"
+            )
+            self.numbering_fix_button.grid()
+        else:
+            self.numbering_fix_button.grid_remove()
+        self.context_menu.entryconfigure(
+            "Исправить нумерацию...",
+            state="normal" if self._numbering_plan is not None else "disabled",
+        )
+
+    def _set_backup_preference(self, enabled: bool) -> None:
+        """Remember the «делать бэкап» choice for both tag writers."""
+        self.settings.backup_before_tag_writes = enabled
+        # Only the preference is written; the rest of settings.json stays as is.
+        with contextlib.suppress(OSError):
+            self.settings.save()
 
     def open_full_info(self) -> None:
         track = self._selected_track()
