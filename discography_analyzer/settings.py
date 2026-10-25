@@ -71,7 +71,7 @@ class AppSettings:
     detect_variations: bool = True
     check_track_gaps: bool = True
     include_subfolders: bool = True
-    folder_tree_mode: bool = False
+    folder_tree_mode: bool = True
     backup_before_tag_writes: bool = True
     dark_theme: bool = True
     formats: dict[str, bool] = field(
