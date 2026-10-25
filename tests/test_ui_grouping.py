@@ -369,6 +369,29 @@ class UiGroupingTests(unittest.TestCase):
         self.assertIsNone(app.cover_photo)
         self.assertEqual(app.cover_label.options["text"], "Обложка не выбрана")
 
+    def test_folders_with_missing_numbers_are_collected(self) -> None:
+        def issue(folder: str, missing=(), unnumbered=()):
+            return SimpleNamespace(
+                relative_folder=folder,
+                missing_numbers=missing,
+                unnumbered_files=unnumbered,
+            )
+
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = SimpleNamespace(
+            completeness_issues=[
+                issue("A/B", missing=(2,)),
+                issue("C", missing=()),
+                issue("D", unnumbered=("x.flac",)),
+                issue("(корень)", missing=(5,)),
+            ]
+        )
+
+        self.assertEqual(
+            app._folders_with_missing_numbers(),
+            {("A", "B"), ()},
+        )
+
     def test_track_number_is_second_column_and_sorts_numerically(self) -> None:
         self.assertEqual(TABLE_COLUMNS[1][0], "track_number")
 
