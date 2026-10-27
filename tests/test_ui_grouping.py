@@ -270,6 +270,39 @@ class UiGroupingTests(unittest.TestCase):
             self.assertEqual(generated, [expected] if expected else [])
             self.assertEqual(result, "break" if expected else None)
 
+    def test_named_keys_never_take_the_key_code_fallback(self) -> None:
+        # On X11 the key code is the hardware code: F1, F3, F4 and keypad 7
+        # are 67, 69, 70 and 79 - the ASCII codes of C, E, F and O - so
+        # Ctrl+F3 opened the export and Ctrl+F1 copied. Only the unnamed "??"
+        # of the Russian layout on Windows may fall back to the key code.
+        calls: list[str] = []
+        for keysym, keycode, letter in (
+            ("F1", 67, "c"),
+            ("F3", 69, "e"),
+            ("F4", 70, "f"),
+            ("KP_Home", 79, "o"),
+        ):
+            result = DiscographyAnalyzerApp._shortcut_by_keycode(
+                SimpleNamespace(keysym=keysym, keycode=keycode),
+                letter,
+                lambda _event, keysym=keysym: calls.append(keysym),
+            )
+            self.assertIsNone(result)
+        self.assertEqual(calls, [])
+
+        generated: list[str] = []
+
+        class FakeEntry:
+            def event_generate(self, virtual: str) -> None:
+                generated.append(virtual)
+
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        result = app._text_shortcut_by_keycode(
+            SimpleNamespace(keysym="F1", keycode=67, widget=FakeEntry())
+        )
+        self.assertIsNone(result)
+        self.assertEqual(generated, [])
+
     def test_shortcuts_work_in_russian_layout_and_with_caps_lock(self) -> None:
         # Tk matches shortcuts by keysym: under the Russian layout the O key
         # reports "Cyrillic_shcha" and under Caps Lock "O", so a plain
