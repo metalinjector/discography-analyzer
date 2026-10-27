@@ -414,3 +414,55 @@ class PreferencesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveShapeTaggingTests(unittest.TestCase):
+    """Answers seen only in the live services: «- EP» titles, ID3v2.3 files."""
+
+    def setUp(self) -> None:
+        self.directory = TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.folder = self.root / "Ariana Grande" / "2015 - Christmas & Chill"
+        self.addCleanup(self.directory.cleanup)
+
+    def test_the_album_tag_keeps_the_folder_name_without_an_ep_suffix(self) -> None:
+        from discography_analyzer.online.album import read_album
+
+        make_flac(self.folder / "01 - Intro.flac")
+        album = read_album(self.folder, self.root, EXTENSIONS)
+        remote = Release(
+            provider="apple",
+            release_id="1719737002",
+            title="Christmas & Chill - EP",
+            artist="Ariana Grande",
+            year=2015,
+            genre="Holiday",
+            track_count=1,
+            tracks=(ReleaseTrack(1, 1, "Intro", "Ariana Grande", 1.0),),
+        )
+
+        plan = plan_album(album, remote, match_tracks(album, remote), FillOptions())
+
+        values = dict(plan.changes[0].text)
+        self.assertEqual(values["album"], "Christmas & Chill")
+
+    def test_an_id3v23_file_stays_v23_after_the_write(self) -> None:
+        from mutagen.id3 import ID3
+
+        path = make_mp3(self.folder / "01 - Battery.mp3", "Battery")
+        album = read_album(self.folder, self.root, EXTENSIONS)
+        remote = Release(
+            provider="apple",
+            release_id="1",
+            title="Master of Puppets",
+            artist="Metallica",
+            year=1986,
+            genre="Metal",
+            track_count=1,
+            tracks=(ReleaseTrack(1, 1, "Battery", "Metallica", 1.0),),
+        )
+        plan = plan_album(album, remote, match_tracks(album, remote), FillOptions())
+
+        apply_plans([plan], client=client(), root=self.root)
+
+        self.assertEqual(ID3(path).version, (2, 3, 0))

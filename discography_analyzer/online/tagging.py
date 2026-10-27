@@ -33,7 +33,7 @@ from ..models import Track
 from ..numbering_fix import write_total
 from .album import LocalAlbum, track_has_cover
 from .http import HttpClient, LookupStopped
-from .matching import TrackMatch
+from .matching import TrackMatch, normalize_title
 from .release import Release, ReleaseTrack
 
 try:
@@ -147,12 +147,19 @@ def missing_fields(album: LocalAlbum, options: FillOptions) -> list[str]:
     return [label for field, label in FIELD_LABELS.items() if field in missing]
 
 
-def _release_value(field: str, release: Release, source: ReleaseTrack) -> str:
+def _release_value(
+    field: str, release: Release, source: ReleaseTrack, album_title: str = ""
+) -> str:
     if field == "title":
         return source.title
     if field == "artist":
         return source.artist or release.artist
     if field == "album":
+        # Apple names the same album «Christmas & Chill - EP»; keep the
+        # collection's own name when both are the same album.
+        local = album_title.strip()
+        if local and normalize_title(local) == normalize_title(release.title):
+            return local
         return release.title
     if field == "album_artist":
         return release.artist
@@ -199,7 +206,11 @@ def plan_album(
             for field in TEXT_FIELDS
             if field in options.fields
             and not getattr(track, field).strip()
-            and (value := _release_value(field, release, source).strip())
+            and (
+                value := _release_value(
+                    field, release, source, album.guess.title
+                ).strip()
+            )
         )
         track_position = None
         if "track" in options.fields:
