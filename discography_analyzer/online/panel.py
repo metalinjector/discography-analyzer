@@ -133,7 +133,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
 
     # -- layout ----------------------------------------------------------------
     def _build_source(self) -> None:
-        source = ttk.LabelFrame(self.frame, text="Источник и папка", padding=(9, 6))
+        source = ttk.LabelFrame(self.frame, text="Источник и папка", padding=(9, 4))
         source.grid(row=0, column=0, sticky="ew")
         source.columnconfigure(1, weight=1)
         self.provider_line = ttk.Frame(source)
@@ -184,28 +184,21 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.provider_line, textvariable=self.token_var, show="•", width=34
         )
 
-        ttk.Label(source, text="Папка").grid(row=1, column=0, padx=(0, 8), pady=(7, 0))
+        ttk.Label(source, text="Папка").grid(row=1, column=0, padx=(0, 8), pady=(4, 0))
         ttk.Entry(source, textvariable=self.root_var, state="readonly").grid(
-            row=1, column=1, sticky="ew", pady=(7, 0)
+            row=1, column=1, sticky="ew", pady=(4, 0)
         )
         ttk.Button(source, text="Выбрать...", command=self._choose_root).grid(
-            row=1, column=2, padx=(8, 0), pady=(7, 0)
+            row=1, column=2, padx=(8, 0), pady=(4, 0)
         )
         ttk.Checkbutton(
             source,
             text="Включать подпапки",
             variable=self.include_subfolders_var,
             command=self._clear_results,
-        ).grid(row=1, column=3, padx=(12, 0), pady=(7, 0))
-        ttk.Checkbutton(
-            source,
-            text="Искать и заполненные",
-            variable=self.include_complete_var,
-            command=self._clear_results,
-        ).grid(row=2, column=3, padx=(12, 0), pady=(7, 0), sticky="e")
-
+        ).grid(row=1, column=3, padx=(12, 0), pady=(4, 0))
         options = ttk.Frame(source)
-        options.grid(row=2, column=0, columnspan=4, sticky="w", pady=(7, 0))
+        options.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Label(options, text="Заполнять пустые:").grid(
             row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10)
         )
@@ -218,10 +211,19 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             ttk.Checkbutton(
                 options, text=label, variable=variable, command=self._options_changed
             ).grid(row=index // 5, column=1 + index % 5, sticky="w", padx=(0, 12))
+        # Not a field: which albums go to the service. It gets its own line:
+        # next to the five checks of the second line the label was clipped at
+        # the right edge even in a 1120 px window.
+        ttk.Checkbutton(
+            options,
+            text="Искать и заполненные",
+            variable=self.include_complete_var,
+            command=self._clear_results,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(2, 0))
 
     def _build_results(self) -> None:
         results = ttk.LabelFrame(self.frame, text="Альбомы и файлы", padding=(9, 6))
-        results.grid(row=1, column=0, sticky="nsew", pady=(7, 0))
+        results.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
         self.frame.rowconfigure(1, weight=1)
         results.columnconfigure(0, weight=1)
         results.rowconfigure(0, weight=1)
@@ -283,7 +285,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
 
     def _build_backup(self) -> None:
         backup = ttk.Frame(self.frame)
-        backup.grid(row=2, column=0, sticky="ew", pady=7)
+        backup.grid(row=2, column=0, sticky="ew", pady=4)
         backup.columnconfigure(1, weight=1)
         ttk.Checkbutton(
             backup,
