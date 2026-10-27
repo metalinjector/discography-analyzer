@@ -198,7 +198,13 @@ def score_release(guess: AlbumGuess, release: Release) -> int:
             score += 10
         else:
             score -= 80
-    if guess.disc is not None and release.detailed:
+    if guess.disc is not None and release.detailed and release.disc_total == 1:
+        # A disc folder against a one-disc release that holds every disc: the
+        # release is probably a digital edition, a real multi-disc one is a
+        # better answer — it carries the disc numbers the folder is named after.
+        score -= 100
+        count = 0
+    elif guess.disc is not None and release.detailed:
         count = release.disc_size(guess.disc)
     elif guess.disc is None:
         count = len(release.tracks) or release.track_count
@@ -274,8 +280,15 @@ def pair_score(
     score = 0
     disc, number = local_position(track, disc_hint)
     if number is not None and number == candidate.number:
-        same_disc = disc == candidate.disc if disc is not None else candidate.disc == 1
-        if single_disc or same_disc:
+        # A position is evidence only when the disc context is unambiguous.
+        # For a «CD2» folder matched against a one-disc release holding all
+        # discs' tracks, the file's number 1 would otherwise take track 1 of
+        # disc 1 — the titles of the wrong disc were written in a live run.
+        if disc is None:
+            position_agrees = single_disc or candidate.disc == 1
+        else:
+            position_agrees = disc == candidate.disc
+        if position_agrees:
             score += 50
     mine_keys = title_keys(local_title(track), artist_hint)
     theirs = normalize_track_title(candidate.title)

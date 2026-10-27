@@ -323,3 +323,62 @@ class LiveShapeTests(unittest.TestCase):
         matches = match_tracks(local, source)
 
         self.assertIsNone(matches[0].source)
+
+
+class DiscFolderTests(unittest.TestCase):
+    """A «CD2» folder against a one-disc release that holds all discs."""
+
+    def test_a_disc_folder_is_not_matched_by_number_to_disc_one(self) -> None:
+        local = album(
+            [
+                track("01 - Lonely Star.flac", seconds=334.0),
+                track("02 - Life Of The Party.flac", seconds=280.0),
+            ],
+            artist="The Weeknd",
+            title="Trilogy",
+            year=2012,
+            disc=2,
+        )
+        source = release(
+            ReleaseTrack(1, 1, "High For This", duration=247.0),
+            ReleaseTrack(1, 2, "What You Need", duration=200.0),
+            ReleaseTrack(1, 3, "Lonely Star", duration=334.0),
+            ReleaseTrack(1, 4, "Life Of The Party", duration=280.0),
+            title="Trilogy",
+            artist="The Weeknd",
+            year=2012,
+        )
+
+        matches = match_tracks(local, source)
+
+        self.assertEqual(
+            [match.source.title if match.source else None for match in matches],
+            ["Lonely Star", "Life Of The Party"],
+        )
+
+    def test_a_disc_folder_prefers_a_real_multi_disc_release_in_the_score(self) -> None:
+        guess = AlbumGuess("The Weeknd", "Trilogy", 2012, 5, 2)
+        digital = Release(
+            provider="discogs",
+            release_id="1",
+            title="Trilogy",
+            artist="The Weeknd",
+            year=2012,
+            track_count=30,
+            tracks=tuple(ReleaseTrack(1, number, f"Track {number}") for number in range(1, 31)),
+        )
+        physical = Release(
+            provider="discogs",
+            release_id="2",
+            title="Trilogy",
+            artist="The Weeknd",
+            year=2012,
+            track_count=30,
+            tracks=tuple(
+                ReleaseTrack(disc, number, f"Track {disc}-{number}")
+                for disc in (1, 2, 3)
+                for number in range(1, 11)
+            ),
+        )
+
+        self.assertLess(score_release(guess, digital), score_release(guess, physical))
