@@ -213,6 +213,49 @@ class UiGroupingTests(unittest.TestCase):
         self.assertTrue(app.tree.stretch)
         self.assertTrue(all(not value for value in app.tree.stretch.values()))
 
+    def test_shortcuts_work_in_russian_layout_and_with_caps_lock(self) -> None:
+        # Tk matches shortcuts by keysym: under the Russian layout the O key
+        # reports "Cyrillic_shcha" and under Caps Lock "O", so a plain
+        # <Control-o> binding silently did nothing in both cases.
+        class FakeWidget:
+            def __init__(self) -> None:
+                self.bindings: dict[str, object] = {}
+                self.virtual: dict[str, tuple[str, ...]] = {}
+
+            def bind(self, sequence: str, callback, add=None) -> None:
+                self.bindings[sequence] = callback
+
+            def event_add(self, virtual: str, *sequences: str) -> None:
+                self.virtual[virtual] = self.virtual.get(virtual, ()) + sequences
+
+        class FakeVar:
+            def trace_add(self, *_args) -> None:
+                pass
+
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.root = FakeWidget()
+        app.tree = FakeWidget()
+        app.filter_entry = FakeWidget()
+        app.filter_var = FakeVar()
+        calls: list[str] = []
+        app.choose_folder = lambda: calls.append("folder")
+        app.open_export = lambda: calls.append("export")
+        app.copy_selected = lambda: calls.append("copy")
+
+        app._bind_actions()
+        for keysym in ("o", "O", "Cyrillic_shcha", "Cyrillic_SHCHA"):
+            app.root.bindings[f"<Control-{keysym}>"](None)
+        app.root.bindings["<Control-Cyrillic_u>"](None)
+        app.tree.bindings["<Control-Cyrillic_es>"](None)
+
+        self.assertEqual(calls, ["folder"] * 4 + ["export", "copy"])
+        self.assertIn("<Control-Cyrillic_a>", app.root.bindings)
+        self.assertIn("<Escape>", app.filter_entry.bindings)
+        # Text fields: Ctrl+V/C/X in the Russian layout reach Tk's own events.
+        self.assertIn("<Control-Cyrillic_em>", app.root.virtual["<<Paste>>"])
+        self.assertIn("<Control-Cyrillic_es>", app.root.virtual["<<Copy>>"])
+        self.assertIn("<Control-Cyrillic_che>", app.root.virtual["<<Cut>>"])
+
     def test_fresh_analysis_starts_with_track_number_order(self) -> None:
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
         app.sort_column = "title"

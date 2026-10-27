@@ -62,6 +62,33 @@ def _files_word(count: int) -> str:
     return "файлов"
 
 
+# The same physical key in the Russian (ЙЦУКЕН) layout. Tk matches shortcuts
+# by keysym, so a <Control-o> binding never fires while that layout is active
+# (the key reports "Cyrillic_shcha") nor under Caps Lock (it reports "O").
+RUSSIAN_LAYOUT_KEYS = {
+    "c": "es",
+    "e": "u",
+    "f": "a",
+    "o": "shcha",
+    "v": "em",
+    "x": "che",
+}
+
+
+def _russian_control_sequences(letter: str) -> list[str]:
+    name = RUSSIAN_LAYOUT_KEYS[letter]
+    return [f"<Control-Cyrillic_{name}>", f"<Control-Cyrillic_{name.upper()}>"]
+
+
+def _control_sequences(letter: str) -> list[str]:
+    """Ctrl+<letter> in both cases (Caps Lock) and in the Russian layout."""
+    return [
+        f"<Control-{letter}>",
+        f"<Control-{letter.upper()}>",
+        *_russian_control_sequences(letter),
+    ]
+
+
 def _responsive_group_width(viewport_width: int) -> int:
     if viewport_width <= 1:
         return 335
@@ -374,9 +401,10 @@ class DiscographyAnalyzerApp:
         ttk.Label(controls, text="Фильтр", style="Toolbar.TLabel").grid(
             row=0, column=8, padx=(12, 5)
         )
-        ttk.Entry(controls, textvariable=self.filter_var, width=26).grid(
-            row=0, column=9
+        self.filter_entry = ttk.Entry(
+            controls, textvariable=self.filter_var, width=26
         )
+        self.filter_entry.grid(row=0, column=9)
         ttk.Button(
             controls,
             text="×",
@@ -502,9 +530,32 @@ class DiscographyAnalyzerApp:
             self._remember_column_widths,
             add="+",
         )
-        self.root.bind("<Control-o>", lambda _event: self.choose_folder())
-        self.root.bind("<Control-e>", lambda _event: self.open_export())
+        self._bind_shortcut(self.root, "o", lambda _event: self.choose_folder())
+        self._bind_shortcut(self.root, "e", lambda _event: self.open_export())
+        self._bind_shortcut(self.root, "f", self._focus_filter)
+        self._bind_shortcut(self.tree, "c", lambda _event: self.copy_selected())
+        self.filter_entry.bind("<Escape>", lambda _event: self.filter_var.set(""))
         self.root.bind("<F5>", lambda _event: self.start_analysis())
+        # Text fields: Tk's own Cut/Copy/Paste events know only Latin keysyms.
+        for virtual, letter in (
+            ("<<Cut>>", "x"),
+            ("<<Copy>>", "c"),
+            ("<<Paste>>", "v"),
+        ):
+            with contextlib.suppress(tk.TclError):
+                self.root.event_add(virtual, *_russian_control_sequences(letter))
+
+    @staticmethod
+    def _bind_shortcut(widget, letter: str, callback) -> None:
+        for sequence in _control_sequences(letter):
+            # A Tk build without the Cyrillic keysym names must still start.
+            with contextlib.suppress(tk.TclError):
+                widget.bind(sequence, callback)
+
+    def _focus_filter(self, _event=None) -> str:
+        self.filter_entry.focus_set()
+        self.filter_entry.select_range(0, "end")
+        return "break"
 
     def _schedule_filter(self) -> None:
         if self._filter_job is not None:
