@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageTk, UnidentifiedImageError
+from PIL import Image, ImageTk
 
 from .audit_dialog import AuditFixDialog
 from .audit_models import AuditSeverity, MetadataAuditIssue
@@ -692,10 +692,11 @@ class DiscographyAnalyzerApp:
         """Re-run the analysis so the table and the audit see the new covers."""
         if self.result is None:
             return
-        analysed_root = self.result.root
-        try:
-            changed_root.resolve().relative_to(analysed_root.resolve())
-        except ValueError:
+        analysed = self.result.root.resolve()
+        changed = changed_root.resolve()
+        # Either folder may contain the other: a run on the parent of the
+        # analysed folder changed the analysed files too.
+        if not (changed.is_relative_to(analysed) or analysed.is_relative_to(changed)):
             return
         if self.worker and self.worker.is_alive():
             return
@@ -2225,7 +2226,9 @@ class DiscographyAnalyzerApp:
             label.image = photo
             if label is self.cover_label:
                 self.cover_photo = photo
-        except (UnidentifiedImageError, OSError):
+        except Exception:
+            # Pillow also raises DecompressionBombError and SyntaxError for
+            # broken pictures; the panel must not keep the previous cover.
             label.configure(image="", text="Обложка не распознана")
 
     def _show_context_menu(self, event) -> None:

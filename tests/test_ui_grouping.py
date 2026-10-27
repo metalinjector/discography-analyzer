@@ -1,4 +1,6 @@
+import struct
 import unittest
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -255,6 +257,57 @@ class UiGroupingTests(unittest.TestCase):
         self.assertIn("<Control-Cyrillic_em>", app.root.virtual["<<Paste>>"])
         self.assertIn("<Control-Cyrillic_es>", app.root.virtual["<<Copy>>"])
         self.assertIn("<Control-Cyrillic_che>", app.root.virtual["<<Cut>>"])
+
+    def test_utility_run_on_a_parent_folder_refreshes_the_analysis(self) -> None:
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = SimpleNamespace(root=Path("/music/Artist"))
+        app.worker = None
+        runs: list[str] = []
+        app.start_analysis = lambda: runs.append("analysis")
+
+        # The parent of the analysed folder contains the analysed files too.
+        app._utility_completed(Path("/music"))
+        app._utility_completed(Path("/music/Artist/Album"))
+        app._utility_completed(Path("/other"))
+
+        self.assertEqual(runs, ["analysis", "analysis"])
+
+    def test_cover_panel_never_keeps_the_previous_cover(self) -> None:
+        # A cover above Pillow's pixel limit raised DecompressionBombError,
+        # which escaped the handler and left the previous track's picture.
+        class FakeLabel:
+            def __init__(self) -> None:
+                self.options = {"image": "previous track", "text": ""}
+
+            def configure(self, **values) -> None:
+                self.options.update(values)
+
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            crc = struct.pack(">I", zlib.crc32(kind + data))
+            return struct.pack(">I", len(data)) + kind + data + crc
+
+        header = struct.pack(">IIBBBBB", 20000, 20000, 8, 2, 0, 0, 0)
+        bomb = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(b"\x00" * 10))
+            + chunk(b"IEND", b"")
+        )
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.cover_label = FakeLabel()
+
+        with patch(
+            "discography_analyzer.ui.read_embedded_cover",
+            return_value=(bomb, "image/png", ""),
+        ):
+            app._load_cover(
+                SimpleNamespace(path=Path("/music/x.flac")), app.cover_label, 190
+            )
+
+        self.assertEqual(
+            app.cover_label.options,
+            {"image": "", "text": "Обложка не распознана"},
+        )
 
     def test_fresh_analysis_starts_with_track_number_order(self) -> None:
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
