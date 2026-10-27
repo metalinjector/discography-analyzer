@@ -215,7 +215,7 @@ class NumberingFixDialog:
                     "✓" if change.relative_path in self.selected else "",
                     change.path.name,
                     (
-                        "(корень)"
+                        str(self.collection_root)
                         if str(Path(change.relative_path).parent) == "."
                         else str(Path(change.relative_path).parent)
                     ),

@@ -194,7 +194,7 @@ def read_track(path: Path, root: Path) -> Track:
         root=root,
         filename=path.name,
         relative_path=str(relative),
-        relative_folder="(корень)" if relative_folder == "." else relative_folder,
+        relative_folder=str(root) if relative_folder == "." else relative_folder,
         format=path.suffix[1:].upper(),
         size_bytes=path.stat().st_size,
         filename_title=title_from_filename(path.name),
@@ -222,7 +222,8 @@ def read_album(folder: Path, root: Path, extensions: set[str]) -> LocalAlbum | N
         relative_folder = str(folder)
     return LocalAlbum(
         folder=folder,
-        relative_folder="(корень)" if relative_folder == "." else relative_folder,
+        # The chosen folder is the album itself: the list shows its name.
+        relative_folder=(folder.name or str(folder)) if relative_folder == "." else relative_folder,
         tracks=tracks,
         guess=guess_album(folder, tracks, root),
         folder_cover=find_folder_cover(folder),

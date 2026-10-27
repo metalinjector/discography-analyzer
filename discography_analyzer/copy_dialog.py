@@ -261,7 +261,7 @@ class UniqueCopyDialog:
         if destination == self.collection_root:
             messagebox.showerror(
                 APP_NAME,
-                "Нельзя копировать файлы прямо в исходную корневую папку.",
+                "Нельзя копировать файлы прямо в исходную папку коллекции.",
                 parent=self.window,
             )
             return

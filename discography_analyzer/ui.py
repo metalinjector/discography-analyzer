@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import date, datetime
+from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -52,7 +53,7 @@ from .scanner import (
     analyze_collection,
 )
 from .settings import AppSettings
-from .utilities_dialog import UtilitiesDialog, UtilityContext
+from .utilities_dialog import FOLDER_ACTIONS, UtilitiesDialog, UtilityContext
 
 TABLE_FIELD_IDS = [item[0] for item in TABLE_COLUMNS]
 
@@ -133,6 +134,8 @@ class DiscographyAnalyzerApp:
         self.audit_issue_by_id: dict[str, MetadataAuditIssue] = {}
         self.audit_item_track_ids: dict[str, str] = {}
         self._numbering_plan: NumberingPlan | None = None
+        # The folder of the row the context menu was opened on.
+        self.menu_folder: Path | None = None
 
         self.root.title(APP_NAME)
         screen_width = self.root.winfo_screenwidth()
@@ -529,10 +532,20 @@ class DiscographyAnalyzerApp:
             state="disabled",
         )
         self.context_menu.add_separator()
+        # The same folder actions as on a folder row: for the track's folder.
+        self._add_folder_actions(self.context_menu)
+        self.context_menu.add_separator()
         self.context_menu.add_command(label="Копировать путь", command=self.copy_path)
         self.context_menu.add_command(
             label="Копировать строку", command=self.copy_selected
         )
+        # The menu of a folder row (the release folder in «По папкам»).
+        self.folder_menu = tk.Menu(self.root, tearoff=False)
+        self._add_folder_actions(self.folder_menu)
+
+    def _add_folder_actions(self, menu: tk.Menu) -> None:
+        for label, panel in FOLDER_ACTIONS:
+            menu.add_command(label=label, command=partial(self._open_folder_utility, panel))
 
     def _bind_actions(self) -> None:
         self.filter_var.trace_add("write", lambda *_: self._schedule_filter())
@@ -727,7 +740,13 @@ class DiscographyAnalyzerApp:
                 self._group_column_width = width
             self.tree.column("#0", width=width, stretch=False)
 
-    def _open_utilities(self) -> None:
+    def _open_folder_utility(self, panel) -> None:
+        """A folder action of the context menu: the utility, with that folder."""
+        if self.menu_folder is not None:
+            self._open_utilities(first=panel, folder=self.menu_folder)
+
+    def _open_utilities(self, first=None, folder: Path | None = None) -> None:
+        """The «Утилиты» window; ``first`` opens on that utility, on ``folder``."""
         root_folder: Path | None = None
         if self.folder_var.get().strip():
             root_folder = Path(self.folder_var.get())
@@ -743,9 +762,9 @@ class DiscographyAnalyzerApp:
             backup_enabled=self.settings.backup_before_tag_writes,
             on_backup_changed=self._set_backup_preference,
             on_completed=self._utility_completed,
-            selected_folder=self._selected_folder(),
+            selected_folder=folder or self._selected_folder(),
         )
-        dialog = UtilitiesDialog(self.root, context)
+        dialog = UtilitiesDialog(self.root, context, first=first)
         self._style_toplevel(dialog.window)
 
     def _selected_folder(self) -> Path | None:
@@ -1177,7 +1196,7 @@ class DiscographyAnalyzerApp:
     def choose_folder(self) -> None:
         selected = filedialog.askdirectory(
             parent=self.root,
-            title="Выберите корневую директорию",
+            title="Выберите папку коллекции",
             initialdir=self.folder_var.get() or None,
         )
         if selected:
@@ -1209,7 +1228,7 @@ class DiscographyAnalyzerApp:
         if not self.folder_var.get() or not folder.is_dir():
             messagebox.showwarning(
                 APP_NAME,
-                "Пожалуйста, выберите корневую директорию",
+                "Пожалуйста, выберите папку коллекции",
                 parent=self.root,
             )
             return
@@ -1838,7 +1857,8 @@ class DiscographyAnalyzerApp:
         return [values.get(column[0], "") for column in TABLE_COLUMNS]
 
     def _folder_parts(self, relative_folder: str) -> tuple[str, ...]:
-        if relative_folder == "(корень)":
+        # The files of the collection folder itself carry its full path.
+        if relative_folder == str(self.result.root):
             return ()
         return tuple(part for part in Path(relative_folder).parts if part not in (".", ""))
 
@@ -2131,7 +2151,7 @@ class DiscographyAnalyzerApp:
             self.info_text,
             folder_summary_text(
                 parts[-1] if parts else (result.root.name or str(result.root)),
-                str(Path(*parts)) if parts else "(корень)",
+                str(Path(*parts)) if parts else str(result.root),
                 tracks,
                 [
                     issue
@@ -2351,12 +2371,23 @@ class DiscographyAnalyzerApp:
 
     def _show_context_menu(self, event) -> None:
         row = self.tree.identify_row(event.y)
+        if not row:
+            return
+        parts = self._folder_parts_from_tree_id(row)
+        if parts is not None and self.result is not None:
+            # A folder row: the folder's own menu.
+            self.tree.selection_set(row)
+            self.tree.focus(row)
+            self.menu_folder = self.result.root.joinpath(*parts)
+            self.folder_menu.tk_popup(event.x_root, event.y_root)
+            return
         track_id = self.audit_item_track_ids.get(row, row)
-        if not row or track_id not in self.track_by_id:
+        if track_id not in self.track_by_id:
             return
         self.tree.selection_set(row)
         self.tree.focus(row)
         track = self.track_by_id.get(track_id)
+        self.menu_folder = track.path.parent
         state = "normal" if track and track.source_track_id else "disabled"
         self.context_menu.entryconfigure("Показать исходный трек", state=state)
         self._refresh_numbering_button()

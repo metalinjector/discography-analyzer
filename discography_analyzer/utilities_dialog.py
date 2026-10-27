@@ -16,10 +16,11 @@ import threading
 import tkinter as tk
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 
 from .constants import APP_NAME
 from .cover_embedding import (
@@ -957,11 +958,23 @@ UTILITY_PANELS: tuple[type[UtilityPanel], ...] = (
     OnlineTagsPanel,
 )
 
+# The main window's menu on a folder: (menu item, the utility it opens with
+# that folder already chosen). A new entry shows up in the menu by itself.
+FOLDER_ACTIONS: tuple[tuple[str, type[UtilityPanel]], ...] = (
+    ("Заполнить теги из интернета…", OnlineTagsPanel),
+)
+
 
 class UtilitiesDialog:
     """Left list of utilities, right panel with the selected one."""
 
-    def __init__(self, parent: tk.Misc, context: UtilityContext) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        context: UtilityContext,
+        first: type[UtilityPanel] | None = None,
+    ) -> None:
+        """``first``: the utility shown when the window opens (the first one by default)."""
         self.parent = parent
         self.context = context
         self.panels: dict[str, UtilityPanel] = {}
@@ -1055,9 +1068,16 @@ class UtilitiesDialog:
         ttk.Button(actions, text="Закрыть", command=self.close).pack(side="right")
 
         if UTILITY_PANELS:
-            self.list.selection_set("0")
-            self.list.focus("0")
-            self._show(0)
+            index = UTILITY_PANELS.index(first) if first in UTILITY_PANELS else 0
+            self.list.selection_set(str(index))
+            self.list.focus(str(index))
+            self._show(index)
+
+    def _panel_cover(self, key: str, data: bytes | None, text: str = "") -> None:
+        """A panel's cover reaches the slot only while that panel is open:
+        a picture arriving late must not appear under another utility."""
+        if key == self.current_key:
+            self._show_cover(data, text)
 
     def _show_cover(self, data: bytes | None, text: str = "") -> None:
         """The left column of the dialog: the cover, or words about it."""
@@ -1074,8 +1094,12 @@ class UtilitiesDialog:
         try:
             with Image.open(io.BytesIO(self.cover_bytes)) as image:
                 inner = COVER_BOX - 12  # the sunken rim takes 3 px a side
-                image.thumbnail((inner, inner))
-                photo = ImageTk.PhotoImage(image.convert("RGB"))
+                image.draft("RGB", (inner, inner))  # a large JPEG is read smaller
+                # The small picture shown while the full one loads fills the
+                # square too, so nothing jumps when the full one replaces it.
+                photo = ImageTk.PhotoImage(
+                    ImageOps.contain(image.convert("RGB"), (inner, inner), Image.Resampling.LANCZOS)
+                )
         except Exception:
             self.cover_photo = None
             self.cover_label.configure(image="", text="Обложка не загружена")
@@ -1110,7 +1134,8 @@ class UtilitiesDialog:
         panel = self.panels.get(key)
         if panel is None:
             panel = panel_class(
-                self.container, replace(self.context, on_cover=self._show_cover)
+                self.container,
+                replace(self.context, on_cover=partial(self._panel_cover, key)),
             )
             self.panels[key] = panel
             panel.frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
