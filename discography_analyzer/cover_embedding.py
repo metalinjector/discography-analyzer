@@ -298,7 +298,10 @@ def _audio_files(folder: Path, extensions: set[str]) -> list[Path]:
         (
             entry
             for entry in entries
-            if entry.is_file() and entry.suffix.casefold() in extensions
+            # Hidden "._" AppleDouble files are not audio, same as in the scan.
+            if not entry.name.startswith(".")
+            and entry.is_file()
+            and entry.suffix.casefold() in extensions
         ),
         key=lambda entry: entry.name.casefold(),
     )

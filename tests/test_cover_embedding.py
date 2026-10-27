@@ -130,6 +130,23 @@ class CoverPlanTests(unittest.TestCase):
 
         self.assertEqual([folder.relative_folder for folder in plan.folders], ["Keep"])
 
+    def test_hidden_audio_files_are_ignored(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cover.jpg").write_bytes(image_bytes())
+            make_flac(root / "one.flac")
+            # AppleDouble companion written by macOS: not audio at all.
+            (root / "._one.flac").write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 80)
+
+            plan = plan_cover_embedding(root, extensions={".flac"})
+
+        self.assertEqual(plan.files_scanned, 1)
+        self.assertEqual(plan.problems, ())
+        self.assertEqual(
+            [target.path.name for target in plan.folders[0].targets],
+            ["one.flac"],
+        )
+
     def test_broken_art_is_replaced_only_on_request(self) -> None:
         from mutagen.id3 import APIC, ID3
 

@@ -61,6 +61,10 @@ def _collect_files(
             folders_scanned += 1
             progress(0, f"Сканирование папки: {current}", len(files), folders_scanned, 0)
             for name in names:
+                # Hidden files are never music: AppleDouble "._" companions
+                # from macOS or a temporary copy left by an interrupted write.
+                if name.startswith("."):
+                    continue
                 suffix = Path(name).suffix.casefold()
                 if suffix in SUPPORTED_FORMATS.values():
                     supported_seen += 1
@@ -71,6 +75,8 @@ def _collect_files(
         for item in sorted(root.iterdir(), key=lambda path: path.name.casefold()):
             if stop_event.is_set():
                 raise AnalysisStopped
+            if item.name.startswith("."):
+                continue
             if item.is_file() and item.suffix.casefold() in SUPPORTED_FORMATS.values():
                 supported_seen += 1
                 if item.suffix.casefold() in selected_extensions:
