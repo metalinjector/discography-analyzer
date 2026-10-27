@@ -12,6 +12,7 @@ from .discogs import DiscogsProvider
 from .http import HttpClient
 from .matching import TrackMatch, match_tracks, release_fits, score_release
 from .musicbrainz import MusicBrainzProvider
+from .proxy import ProxySettings, ProxyTransport
 from .release import AlbumQuery, Provider, Release
 
 PROVIDERS: tuple[type[Provider], ...] = (
@@ -20,6 +21,8 @@ PROVIDERS: tuple[type[Provider], ...] = (
     MusicBrainzProvider,
     DiscogsProvider,
 )
+SERVICE_NAMES = {provider.key: provider.name for provider in PROVIDERS}
+SERVICE_HOSTS = {provider.key: provider.hosts for provider in PROVIDERS}
 SEARCH_LIMIT = 10
 # Track lists are loaded for the best candidates only: every list is one
 # more request, and Apple allows about 20 a minute.
@@ -31,11 +34,25 @@ def provider_class(key: str) -> type[Provider]:
     return next((provider for provider in PROVIDERS if provider.key == key), PROVIDERS[0])
 
 
-def make_client(stop_event: threading.Event | None = None) -> HttpClient:
+def make_client(
+    stop_event: threading.Event | None = None,
+    proxy: ProxySettings | None = None,
+    *,
+    timeout: float = 20.0,
+) -> HttpClient:
+    """A client with the pauses of every service and the chosen proxy.
+
+    ``ValueError`` if the proxy of one's own has an unusable address.
+    """
     pacing: dict[str, float] = {}
     for provider in PROVIDERS:
         pacing.update(provider.pacing)
-    return HttpClient(pacing=pacing, stop_event=stop_event)
+    return HttpClient(
+        pacing=pacing,
+        timeout=timeout,
+        transport=ProxyTransport(proxy or ProxySettings(), SERVICE_HOSTS),
+        stop_event=stop_event,
+    )
 
 
 @dataclass(slots=True)

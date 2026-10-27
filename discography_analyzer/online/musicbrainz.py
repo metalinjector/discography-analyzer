@@ -59,6 +59,9 @@ class MusicBrainzProvider(Provider):
     key = "musicbrainz"
     name = "MusicBrainz"
     pacing = {"musicbrainz.org": 1.1}
+    # The Cover Art Archive redirects to archive.org.
+    hosts = ("musicbrainz.org", "coverartarchive.org", "archive.org")
+    status_url = f"{MUSICBRAINZ_API}/release?query=metallica&limit=1&fmt=json"
 
     def _query(self, query: AlbumQuery, strict: bool) -> str:
         title = EDITION_GROUP_RE.sub("", query.title).strip() or query.title.strip()

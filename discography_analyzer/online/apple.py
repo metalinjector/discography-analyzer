@@ -41,6 +41,8 @@ class AppleProvider(Provider):
     key = "apple"
     name = "Apple Music"
     pacing = {"itunes.apple.com": 3.0}
+    hosts = ("apple.com", "mzstatic.com")
+    status_url = f"{ITUNES_API}/search?term=metallica&entity=album&limit=1"
 
     @property
     def country(self) -> str:

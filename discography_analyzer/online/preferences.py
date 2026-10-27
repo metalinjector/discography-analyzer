@@ -1,7 +1,8 @@
 """The utility's own settings, next to the program's ``settings.json``.
 
 Kept apart from :class:`AppSettings` so the package stays self-contained. The
-Discogs token is the user's personal token and is stored in this file as is.
+Discogs token and the login of a proxy are the user's own and are stored in
+this file as they are.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from ..settings import settings_path
+from .proxy import MODES, ProxySettings
 
 DEFAULT_FIELDS = ("title", "artist", "album", "year", "genre", "track", "disc")
 
@@ -25,6 +27,14 @@ class OnlinePreferences:
     fields: list[str] = field(default_factory=lambda: list(DEFAULT_FIELDS))
     embed_cover: bool = True
     save_cover_file: bool = True
+    proxy_mode: str = "system"
+    proxy_url: str = ""
+    proxy_services: list[str] = field(default_factory=lambda: ["deezer"])
+
+    @property
+    def proxy(self) -> ProxySettings:
+        mode = self.proxy_mode if self.proxy_mode in MODES else "system"
+        return ProxySettings(mode, self.proxy_url, frozenset(self.proxy_services))
 
 
 def preferences_path() -> Path:

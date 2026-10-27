@@ -2,7 +2,8 @@
 
 Only the standard library is used: ``urllib`` honours the system proxy
 (``HTTPS_PROXY`` or the Windows settings) and the system certificates, so the
-portable .exe needs nothing extra.
+portable .exe needs nothing extra. A proxy of the user's own is chosen per
+request by :mod:`.proxy`.
 """
 
 from __future__ import annotations
@@ -52,10 +53,17 @@ class Response:
 Transport = Callable[[str, Mapping[str, str], float], Response]
 
 
-def urllib_transport(url: str, headers: Mapping[str, str], timeout: float) -> Response:
+def fetch(
+    opener: urllib.request.OpenerDirector | None,
+    url: str,
+    headers: Mapping[str, str],
+    timeout: float,
+) -> Response:
+    """GET ``url`` through ``opener`` (None: urllib's own, with the system proxy)."""
     request = urllib.request.Request(url, headers=dict(headers))
+    open_url = opener.open if opener is not None else urllib.request.urlopen
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as reply:
+        with open_url(request, timeout=timeout) as reply:
             body = reply.read(MAX_RESPONSE_BYTES + 1)
             return Response(reply.status, body, dict(reply.headers.items()))
     except urllib.error.HTTPError as error:
@@ -64,6 +72,10 @@ def urllib_transport(url: str, headers: Mapping[str, str], timeout: float) -> Re
             body = error.read(65536)
         headers = dict(error.headers.items()) if error.headers else {}
         return Response(error.code, body, headers)
+
+
+def urllib_transport(url: str, headers: Mapping[str, str], timeout: float) -> Response:
+    return fetch(None, url, headers, timeout)
 
 
 def _reason(error: BaseException) -> str:

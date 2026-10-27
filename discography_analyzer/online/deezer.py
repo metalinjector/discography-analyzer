@@ -4,7 +4,8 @@
 ``/album/<id>/tracks`` gives positions (``disk_number``, ``track_position``),
 which the album's own track list does not carry. An exceeded quota comes as
 HTTP 200 with ``{"error": {"code": 4}}`` and is waited out, as in
-global-music-scanner-2 (``services/deezer/api.ts``).
+global-music-scanner-2 (``services/deezer/api.ts``). Deezer is closed in some
+countries; ``/infos`` names the country it sees and whether it is open there.
 """
 
 from __future__ import annotations
@@ -13,7 +14,15 @@ from dataclasses import replace
 from urllib.parse import urlencode
 
 from .http import HttpError
-from .release import AlbumQuery, Provider, Release, ReleaseTrack, parse_year, to_int
+from .release import (
+    AlbumQuery,
+    Provider,
+    Release,
+    ReleaseTrack,
+    ServiceStatus,
+    parse_year,
+    to_int,
+)
 
 DEEZER_API = "https://api.deezer.com"
 QUOTA_ERRORS = {4, 700}
@@ -25,6 +34,18 @@ class DeezerProvider(Provider):
     key = "deezer"
     name = "Deezer"
     pacing = {"api.deezer.com": 0.15}
+    hosts = ("deezer.com", "dzcdn.net")
+    status_url = f"{DEEZER_API}/infos"
+
+    def check(self) -> ServiceStatus:
+        data = self._get(self.status_url)
+        country = str(data.get("country") or data.get("country_iso") or "?")
+        if data.get("open") is False:
+            return ServiceStatus(
+                False,
+                f"Deezer закрыт в стране «{country}» — включите для Deezer свой прокси",
+            )
+        return ServiceStatus(True, f"доступен, страна запроса — {country}")
 
     def _get(self, url: str) -> dict:
         for pause in (*QUOTA_PAUSES, None):

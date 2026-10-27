@@ -74,6 +74,12 @@ class LookupOptions:
     discogs_token: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ServiceStatus:
+    available: bool
+    text: str
+
+
 class Provider:
     """One online catalogue: album search and the track list of a release."""
 
@@ -81,6 +87,11 @@ class Provider:
     name = ""
     # Minimal pause between two requests to a host, seconds.
     pacing: Mapping[str, float] = {}
+    # Domains of the service and of its covers: the proxy chosen for the
+    # service is used for all of them.
+    hosts: tuple[str, ...] = ()
+    # A cheap request for «Проверить».
+    status_url = ""
 
     def __init__(self, client: HttpClient, options: LookupOptions) -> None:
         self.client = client
@@ -92,6 +103,11 @@ class Provider:
     def details(self, release: Release) -> Release:
         """The same release with ``tracks`` (and the fields only the lookup has)."""
         raise NotImplementedError
+
+    def check(self) -> ServiceStatus:
+        """Does the service answer (through the proxy chosen for it)?"""
+        self.client.get_bytes(self.status_url)
+        return ServiceStatus(True, "отвечает")
 
 
 def parse_year(value: object) -> int | None:

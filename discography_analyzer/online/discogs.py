@@ -12,7 +12,15 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from .http import HttpError
-from .release import AlbumQuery, Provider, Release, ReleaseTrack, parse_year, to_int
+from .release import (
+    AlbumQuery,
+    Provider,
+    Release,
+    ReleaseTrack,
+    ServiceStatus,
+    parse_year,
+    to_int,
+)
 
 DISCOGS_API = "https://api.discogs.com"
 TOKEN_HINT = (
@@ -53,6 +61,16 @@ class DiscogsProvider(Provider):
     key = "discogs"
     name = "Discogs"
     pacing = {"api.discogs.com": 1.0}
+    hosts = ("discogs.com",)
+    status_url = f"{DISCOGS_API}/"
+
+    def check(self) -> ServiceStatus:
+        if not self.options.discogs_token.strip():
+            self.client.get_bytes(self.status_url)
+            return ServiceStatus(True, "отвечает; для поиска нужен токен")
+        # /oauth/identity names the owner of the token: the token works.
+        identity = self._get(f"{DISCOGS_API}/oauth/identity")
+        return ServiceStatus(True, f"токен принят, пользователь «{identity.get('username', '?')}»")
 
     def _headers(self) -> dict[str, str]:
         token = self.options.discogs_token.strip()
