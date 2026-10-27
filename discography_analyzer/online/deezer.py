@@ -41,9 +41,13 @@ class DeezerProvider(Provider):
         data = self._get(self.status_url)
         country = str(data.get("country") or data.get("country_iso") or "?")
         if data.get("open") is False:
+            # Live check: with open=false the search and album endpoints still
+            # answer, only the streams are unavailable — the utility needs the
+            # metadata, so say what works instead of «everything is closed».
             return ServiceStatus(
                 False,
-                f"Deezer закрыт в стране «{country}» — включите для Deezer свой прокси",
+                f"Deezer закрыт в стране «{country}»: потоки недоступны, "
+                "поиск и теги работают; для потоков включите для Deezer свой прокси",
             )
         return ServiceStatus(True, f"доступен, страна запроса — {country}")
 

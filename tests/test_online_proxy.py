@@ -267,6 +267,8 @@ class ServiceCheckTests(unittest.TestCase):
         status = closed.check()
         self.assertFalse(status.available)
         self.assertIn("Russia", status.text)
+        # The live API still answers searches from a closed country.
+        self.assertIn("поиск и теги работают", status.text)
         self.assertEqual(opened.check().text, "доступен, страна запроса — Germany")
 
     def test_discogs_checks_the_token_when_there_is_one(self) -> None:
