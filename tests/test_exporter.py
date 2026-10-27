@@ -84,7 +84,7 @@ class ExporterTests(unittest.TestCase):
     def test_disabling_all_sheets_still_creates_all_tracks(self) -> None:
         with TemporaryDirectory() as directory:
             path = export_xlsx(
-                [track("one", TrackStatus.UNIQUE, "(корень)")],
+                [track("one", TrackStatus.UNIQUE, "Album")],
                 Path(directory) / "fallback.xlsx",
                 {"all": False, "attention": False, "matrix": False, "folders": False},
                 [],
@@ -94,7 +94,7 @@ class ExporterTests(unittest.TestCase):
             self.assertEqual(workbook.sheetnames, ["Все треки"])
 
     def test_empty_metadata_fields_do_not_break_column_sizing(self) -> None:
-        empty_track = track("empty", TrackStatus.UNIQUE, "(корень)")
+        empty_track = track("empty", TrackStatus.UNIQUE, "Album")
         empty_track.artist = ""
         empty_track.album = ""
         empty_track.genre = ""
@@ -114,7 +114,7 @@ class ExporterTests(unittest.TestCase):
             self.assertEqual(sheet.row_dimensions[5].height, 17.25)
 
     def test_leading_spaces_do_not_bypass_formula_protection(self) -> None:
-        unsafe_track = track("unsafe", TrackStatus.UNIQUE, "(корень)")
+        unsafe_track = track("unsafe", TrackStatus.UNIQUE, "Album")
         unsafe_track.artist = "  =HYPERLINK(\"https://example.invalid\")"
         with TemporaryDirectory() as directory:
             path = export_xlsx(
@@ -133,7 +133,7 @@ class ExporterTests(unittest.TestCase):
             )
 
     def test_control_characters_do_not_abort_export(self) -> None:
-        dirty_track = track("dirty", TrackStatus.UNIQUE, "(корень)")
+        dirty_track = track("dirty", TrackStatus.UNIQUE, "Album")
         dirty_track.title = "Song\x01Name"
         # Removing the character must not let a formula slip through.
         dirty_track.artist = "\x0c=1+1"
@@ -163,7 +163,7 @@ class ExporterTests(unittest.TestCase):
                 self.assertRaisesRegex(OSError, "disk write failed"),
             ):
                 export_xlsx(
-                    [track("one", TrackStatus.UNIQUE, "(корень)")],
+                    [track("one", TrackStatus.UNIQUE, "Album")],
                     path,
                     {"all": True},
                     ["artist"],

@@ -40,7 +40,7 @@ def make_track(path: Path) -> Track:
         root=path.parent,
         filename=path.name,
         relative_path=path.name,
-        relative_folder="(корень)",
+        relative_folder=str(path.parent),
         format=path.suffix[1:].upper(),
         size_bytes=path.stat().st_size,
     )

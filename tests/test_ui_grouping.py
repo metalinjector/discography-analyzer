@@ -704,12 +704,14 @@ class UiGroupingTests(unittest.TestCase):
 
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
         app.result = SimpleNamespace(
+            root=Path("/music"),
             completeness_issues=[
                 issue("A/B", missing=(2,)),
                 issue("C", missing=()),
                 issue("D", unnumbered=("x.flac",)),
-                issue("(корень)", missing=(5,)),
-            ]
+                # A file of the collection folder itself carries its full path.
+                issue(str(Path("/music")), missing=(5,)),
+            ],
         )
 
         self.assertEqual(
@@ -751,11 +753,11 @@ class UiGroupingTests(unittest.TestCase):
         in_album = track("album", TrackStatus.UNIQUE, related=[])
         in_album.relative_folder = str(Path("Artist", "Album"))
         in_root = track("root", TrackStatus.UNIQUE, related=[])
-        in_root.relative_folder = "(корень)"
+        in_root.relative_folder = str(Path("/music"))
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
         app.result = SimpleNamespace(
             root=Path("/music"),
-            completeness_issues=[gap(in_album.relative_folder), gap("(корень)")],
+            completeness_issues=[gap(in_album.relative_folder), gap(in_root.relative_folder)],
         )
         app.tree = FakeTree()
         app._folder_column_width = None

@@ -106,6 +106,41 @@ class ScannerTests(unittest.TestCase):
         self.assertIn("Аудит метаданных...", states)
         self.assertIn("Пропущено недоступных файлов: 1", states[-1])
 
+    def test_a_file_of_the_collection_folder_names_that_folder(self) -> None:
+        # It used to be «(корень)». The bare name «music» is not enough: a
+        # subfolder may be called the same, and the two would be grouped as one.
+        root = Path("/music")
+        loose = root / "loose.mp3"
+        inside = root / "music" / "song.mp3"
+
+        with (
+            patch(
+                "discography_analyzer.scanner._collect_files",
+                return_value=([loose, inside], 2),
+            ),
+            patch(
+                "discography_analyzer.scanner.Path.stat",
+                autospec=True,
+                return_value=SimpleNamespace(st_size=1024, st_mtime=0, st_ctime=0),
+            ),
+            patch("discography_analyzer.scanner.read_metadata"),
+        ):
+            result = analyze_collection(
+                root=root,
+                include_subfolders=True,
+                selected_formats=["MP3"],
+                excluded_folders=[],
+                use_tags=False,
+                detect_variations=False,
+                check_track_gaps=False,
+                variation_markers=[],
+                stop_event=threading.Event(),
+                progress=lambda *_args: None,
+            )
+
+        folders = {track.filename: track.relative_folder for track in result.tracks}
+        self.assertEqual(folders, {"loose.mp3": str(root), "song.mp3": "music"})
+
 
 if __name__ == "__main__":
     unittest.main()

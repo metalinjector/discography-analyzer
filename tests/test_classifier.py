@@ -20,7 +20,7 @@ def make_track(
         root=Path("/music"),
         filename=path.name,
         relative_path=path.name,
-        relative_folder="(корень)",
+        relative_folder=str(Path("/music")),
         format="MP3",
         size_bytes=100,
         filename_title=filename_title,

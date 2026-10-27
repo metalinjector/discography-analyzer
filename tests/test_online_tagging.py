@@ -126,6 +126,15 @@ class PlanTests(unittest.TestCase):
         album = read_album(self.folder, self.root, EXTENSIONS)
         return plan_album(album, remote, match_tracks(album, remote), options or FillOptions())
 
+    def test_an_album_chosen_as_the_folder_itself_is_listed_by_its_name(self) -> None:
+        make_flac(self.folder / "01 - Battery.flac")
+
+        album = read_album(self.folder, self.folder, EXTENSIONS)
+
+        # It used to be «(корень)» in the list of albums.
+        self.assertEqual(album.relative_folder, "1986 - Master of Puppets")
+        self.assertEqual(album.tracks[0].relative_folder, str(self.folder))
+
     def test_only_empty_fields_are_planned(self) -> None:
         make_flac(self.folder / "01 - Battery.flac", title="Battery (my title)", genre="Thrash")
         make_flac(self.folder / "02 - Master of Puppets.flac", tracknumber="2")

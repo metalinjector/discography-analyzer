@@ -126,7 +126,9 @@ def analyze_collection(
             relative = path.relative_to(root)
             relative_folder = str(relative.parent)
             if relative_folder == ".":
-                relative_folder = "(корень)"
+                # A file of the collection folder itself: the folder's full
+                # path. Its bare name could be the name of a subfolder too.
+                relative_folder = str(root)
             track = Track(
                 id=uuid.uuid4().hex,
                 path=path,

@@ -1177,7 +1177,7 @@ class DiscographyAnalyzerApp:
     def choose_folder(self) -> None:
         selected = filedialog.askdirectory(
             parent=self.root,
-            title="Выберите корневую директорию",
+            title="Выберите папку коллекции",
             initialdir=self.folder_var.get() or None,
         )
         if selected:
@@ -1209,7 +1209,7 @@ class DiscographyAnalyzerApp:
         if not self.folder_var.get() or not folder.is_dir():
             messagebox.showwarning(
                 APP_NAME,
-                "Пожалуйста, выберите корневую директорию",
+                "Пожалуйста, выберите папку коллекции",
                 parent=self.root,
             )
             return
@@ -1838,7 +1838,8 @@ class DiscographyAnalyzerApp:
         return [values.get(column[0], "") for column in TABLE_COLUMNS]
 
     def _folder_parts(self, relative_folder: str) -> tuple[str, ...]:
-        if relative_folder == "(корень)":
+        # The files of the collection folder itself carry its full path.
+        if relative_folder == str(self.result.root):
             return ()
         return tuple(part for part in Path(relative_folder).parts if part not in (".", ""))
 
@@ -2131,7 +2132,7 @@ class DiscographyAnalyzerApp:
             self.info_text,
             folder_summary_text(
                 parts[-1] if parts else (result.root.name or str(result.root)),
-                str(Path(*parts)) if parts else "(корень)",
+                str(Path(*parts)) if parts else str(result.root),
                 tracks,
                 [
                     issue
