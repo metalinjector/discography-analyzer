@@ -11,7 +11,7 @@ from discography_analyzer.audit_models import (
     MetadataAuditIssue,
 )
 from discography_analyzer.constants import TABLE_COLUMNS
-from discography_analyzer.models import Track, TrackStatus
+from discography_analyzer.models import AlbumCompletenessIssue, Track, TrackStatus
 from discography_analyzer.parsing import files_word
 from discography_analyzer.ui import (
     DiscographyAnalyzerApp,
@@ -607,6 +607,55 @@ class UiGroupingTests(unittest.TestCase):
             app._folders_with_missing_numbers(),
             {("A", "B"), ()},
         )
+
+    def test_gap_folder_rows_carry_only_the_gap_tag(self) -> None:
+        # ttk resolves options of several tags by tag creation order, not by
+        # the order in the row's list (ttkTagSet.c, Tk 8.6.13-8.6.15): with
+        # ("Folder", "FolderGap") the earlier-created Folder background won
+        # and the dark-red highlight of 1.8.4 never showed.
+        class FakeTree:
+            def __init__(self) -> None:
+                self.tags: dict[str, tuple[str, ...]] = {}
+
+            def configure(self, **_values) -> None:
+                pass
+
+            def column(self, *_args, **_values) -> None:
+                pass
+
+            def insert(self, _parent, _index, *, iid: str, **values) -> str:
+                self.tags[iid] = tuple(values.get("tags", ()))
+                return iid
+
+        def gap(folder: str) -> AlbumCompletenessIssue:
+            return AlbumCompletenessIssue(
+                id=f"gap-{folder}",
+                relative_folder=folder,
+                album="Album",
+                disc=1,
+                present_numbers=(1, 2),
+                missing_numbers=(3,),
+                expected_total=3,
+                total_from_tags=True,
+            )
+
+        in_album = track("album", TrackStatus.UNIQUE, related=[])
+        in_album.relative_folder = str(Path("Artist", "Album"))
+        in_root = track("root", TrackStatus.UNIQUE, related=[])
+        in_root.relative_folder = "(корень)"
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = SimpleNamespace(
+            root=Path("/music"),
+            completeness_issues=[gap(in_album.relative_folder), gap("(корень)")],
+        )
+        app.tree = FakeTree()
+        app._folder_column_width = None
+
+        app._insert_folder_tree([in_root, in_album])
+
+        self.assertEqual(app.tree.tags["folder-root::node"], ("FolderGap",))
+        self.assertEqual(app.tree.tags["folder-path::Artist/Album"], ("FolderGap",))
+        self.assertEqual(app.tree.tags["folder-path::Artist"], ("Folder",))
 
     def test_track_number_is_second_column_and_sorts_numerically(self) -> None:
         self.assertEqual(TABLE_COLUMNS[1][0], "track_number")

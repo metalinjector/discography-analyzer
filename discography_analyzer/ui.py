@@ -1044,6 +1044,8 @@ class DiscographyAnalyzerApp:
         )
         # A folder whose release is missing files according to the tags: dark
         # red, almost burgundy, so it is visible without opening the folder.
+        # Such a row carries this tag alone: ttk gives tags created earlier
+        # (Folder) priority whatever their order in the row's tag list.
         self.tree.tag_configure(
             "FolderGap",
             background="#5a1c1c" if dark else "#591a1a",
@@ -1793,7 +1795,7 @@ class DiscographyAnalyzerApp:
         root_id = "folder-root::node"
         root_name = self.result.root.name or str(self.result.root)
         folders_with_gaps = self._folders_with_missing_numbers()
-        root_tags = ("Folder", "FolderGap") if () in folders_with_gaps else ("Folder",)
+        root_tags = ("FolderGap",) if () in folders_with_gaps else ("Folder",)
         self.tree.insert(
             "",
             "end",
@@ -1813,11 +1815,7 @@ class DiscographyAnalyzerApp:
             parent_parts = parts[:-1]
             parent = ensure_folder(parent_parts)
             item_id = "folder-path::" + "/".join(parts)
-            tags = (
-                ("Folder", "FolderGap")
-                if parts in folders_with_gaps
-                else ("Folder",)
-            )
+            tags = ("FolderGap",) if parts in folders_with_gaps else ("Folder",)
             self.tree.insert(
                 parent,
                 "end",
