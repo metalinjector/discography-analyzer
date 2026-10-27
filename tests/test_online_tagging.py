@@ -400,9 +400,16 @@ class PreferencesTests(unittest.TestCase):
             path = Path(directory) / "online_tags.json"
             self.assertEqual(load_preferences(path), OnlinePreferences())
 
-            save_preferences(OnlinePreferences(provider="deezer", fields=["title"]), path)
+            save_preferences(
+                OnlinePreferences(
+                    provider="deezer", fields=["title"], selection_mode="manual"
+                ),
+                path,
+            )
             self.assertEqual(load_preferences(path).provider, "deezer")
             self.assertEqual(load_preferences(path).fields, ["title"])
+            self.assertEqual(load_preferences(path).selection_mode, "manual")
+            self.assertFalse(load_preferences(path).auto_select)
 
             path.write_text(json.dumps({"provider": 5, "fields": "title", "embed_cover": False}))
             loaded = load_preferences(path)
@@ -466,3 +473,72 @@ class LiveShapeTaggingTests(unittest.TestCase):
         apply_plans([plan], client=client(), root=self.root)
 
         self.assertEqual(ID3(path).version, (2, 3, 0))
+
+
+class AutoChooseTests(unittest.TestCase):
+    """Auto mode picks a release; manual mode leaves the choice to the user."""
+
+    def provider(self):
+        from discography_analyzer.online.release import (
+            AlbumQuery,
+            Provider,
+            Release,
+            ReleaseTrack,
+        )
+
+        class FakeProvider(Provider):
+            key = "fake"
+            name = "Fake"
+
+            def search(self, query: AlbumQuery, limit: int = 10):
+                return [
+                    Release(
+                        provider="fake",
+                        release_id="1",
+                        title="Master of Puppets",
+                        artist="Metallica",
+                        year=1986,
+                        track_count=2,
+                        tracks=(),
+                    )
+                ]
+
+            def details(self, release: Release) -> Release:
+                return Release(
+                    provider="fake",
+                    release_id=release.release_id,
+                    title=release.title,
+                    artist=release.artist,
+                    year=release.year,
+                    track_count=2,
+                    tracks=(
+                        ReleaseTrack(1, 1, "Battery", "Metallica", 1.0),
+                        ReleaseTrack(1, 2, "Master of Puppets", "Metallica", 1.0),
+                    ),
+                )
+
+        return FakeProvider(client=client(), options=LookupOptions())
+
+    def album(self) -> Path:
+        from discography_analyzer.online.album import read_album
+
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        folder = Path(directory.name) / "Metallica" / "1986 - Master of Puppets"
+        make_flac(folder / "01 - Battery.flac")
+        make_flac(folder / "02 - Master of Puppets.flac")
+        return read_album(folder, Path(directory.name), EXTENSIONS)
+
+    def test_auto_mode_chooses_a_confident_release(self) -> None:
+        lookup = look_up(self.provider(), self.album())
+
+        self.assertEqual(lookup.chosen, 0)
+        self.assertTrue(lookup.choice is not None)
+
+    def test_manual_mode_finds_the_same_release_but_chooses_nothing(self) -> None:
+        lookup = look_up(self.provider(), self.album(), auto_choose=False)
+
+        self.assertIsNone(lookup.chosen)
+        self.assertIsNone(lookup.choice)
+        self.assertEqual(len(lookup.candidates), 1)
+        self.assertTrue(lookup.candidates[0].confident)

@@ -30,6 +30,13 @@ class OnlinePreferences:
     proxy_mode: str = "system"
     proxy_url: str = ""
     proxy_services: list[str] = field(default_factory=lambda: ["deezer"])
+    # "auto": the panel chooses a release when it is sure; "manual": the user
+    # always picks from the found variants.
+    selection_mode: str = "auto"
+
+    @property
+    def auto_select(self) -> bool:
+        return self.selection_mode != "manual"
 
     @property
     def proxy(self) -> ProxySettings:

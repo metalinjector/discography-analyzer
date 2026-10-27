@@ -137,10 +137,13 @@ def look_up(
     query: AlbumQuery | None = None,
     *,
     cache: LookupCache | None = None,
+    auto_choose: bool = True,
 ) -> AlbumLookup:
     """Search ``provider`` for ``album`` and choose a release if one clearly fits.
 
-    Network errors propagate; the caller records them on the album row.
+    ``auto_choose=False`` is the manual mode: the candidates are found and the
+    two best track lists are loaded, but nothing is chosen — the user picks a
+    variant himself. Network errors propagate; the caller records them.
     """
     cache = cache if cache is not None else LookupCache()
     query = query or AlbumQuery(album.guess.artist, album.guess.title)
@@ -162,6 +165,6 @@ def look_up(
         if candidate.confident and candidate.coverage == 1.0:
             break
     lookup.candidates.sort(key=lambda candidate: -candidate.rank)
-    if lookup.candidates and lookup.candidates[0].confident:
+    if auto_choose and lookup.candidates and lookup.candidates[0].confident:
         lookup.chosen = 0
     return lookup
