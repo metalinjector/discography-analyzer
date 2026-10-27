@@ -9,7 +9,7 @@ import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -44,6 +44,7 @@ from .models import (
 from .numbering_dialog import NumberingFixDialog
 from .numbering_fix import NumberingPlan, plan_numbering_fix
 from .parsing import files_word, folders_word, validate_markers
+from .playlist import write_playlist
 from .scanner import (
     AnalysisStopped,
     NoAudioFilesError,
@@ -452,27 +453,34 @@ class DiscographyAnalyzerApp:
 
         bottom = ttk.Frame(self.root, padding=12)
         bottom.grid(row=5, column=0, sticky="ew")
-        bottom.columnconfigure(6, weight=1)
+        bottom.columnconfigure(7, weight=1)
         ttk.Button(
             bottom,
             text="Экспорт в XLSX",
             command=self.open_export,
             style="Accent.TButton",
         ).grid(row=0, column=0)
+        self.playlist_button = ttk.Button(
+            bottom,
+            text="Плейлист M3U8...",
+            command=self.export_playlist,
+            state="disabled",
+        )
+        self.playlist_button.grid(row=0, column=1, padx=(6, 0))
         self.unique_copy_button = ttk.Button(
             bottom,
             text="Копировать уникальные...",
             command=self.open_unique_copy,
             state="disabled",
         )
-        self.unique_copy_button.grid(row=0, column=1, padx=(6, 0))
+        self.unique_copy_button.grid(row=0, column=2, padx=(6, 0))
         self.audit_fix_button = ttk.Button(
             bottom,
             text="Исправить замечания...",
             command=self.open_audit_fixes,
             state="disabled",
         )
-        self.audit_fix_button.grid(row=0, column=2, padx=(6, 0))
+        self.audit_fix_button.grid(row=0, column=3, padx=(6, 0))
         # Shown only while the selection points at a group whose Track # totals
         # contradict the found numbering.
         self.numbering_fix_button = ttk.Button(
@@ -481,20 +489,20 @@ class DiscographyAnalyzerApp:
             command=self.open_numbering_fix,
             style="Numbering.TButton",
         )
-        self.numbering_fix_button.grid(row=0, column=3, padx=(6, 0))
+        self.numbering_fix_button.grid(row=0, column=4, padx=(6, 0))
         self.numbering_fix_button.grid_remove()
         ttk.Button(
             bottom,
             text="Копировать в буфер",
             command=self.copy_selected,
-        ).grid(row=0, column=4, padx=6)
+        ).grid(row=0, column=5, padx=6)
         ttk.Button(bottom, text="Открыть файл", command=self.open_selected_file).grid(
-            row=0, column=5
+            row=0, column=6
         )
         # Its own row: with the numbering button the summary no longer fits
         # next to the actions and was clipped at the window edge.
         ttk.Label(bottom, textvariable=self.statistics_var, anchor="w").grid(
-            row=1, column=0, columnspan=7, sticky="ew", pady=(7, 0)
+            row=1, column=0, columnspan=8, sticky="ew", pady=(7, 0)
         )
 
         self.context_menu = tk.Menu(self.root, tearoff=False)
@@ -1288,6 +1296,7 @@ class DiscographyAnalyzerApp:
         }
         self._restore_buttons()
         self.unique_copy_button.configure(state="normal")
+        self.playlist_button.configure(state="normal")
         self._reset_sort_to_track_number()
         self.refresh_table()
         self._update_statistics()
@@ -1312,6 +1321,7 @@ class DiscographyAnalyzerApp:
         self.statistics_var.set("Статистика: —")
         self.shown_count_var.set("0 из 0")
         self.unique_copy_button.configure(state="disabled")
+        self.playlist_button.configure(state="disabled")
         self.audit_fix_button.configure(state="disabled")
         self._numbering_plan = None
         self.numbering_fix_button.grid_remove()
@@ -2711,6 +2721,76 @@ class DiscographyAnalyzerApp:
         ttk.Button(actions, text="Сохранить", command=save).pack(side="left")
         ttk.Button(actions, text="Отмена", command=window.destroy).pack(
             side="left", padx=(6, 0)
+        )
+
+
+    def _playlist_tracks(self) -> list[Track]:
+        """The folder subtree, or the visible rows of the current tab in order."""
+        if self.result is None:
+            return []
+        parts = self._folder_parts_from_tree_id(self.tree.focus())
+        if parts is None:
+            return list(self.visible_tracks)
+        prefix_length = len(parts)
+        selected = [
+            track
+            for track in self.result.tracks
+            if self._folder_parts(track.relative_folder)[:prefix_length] == parts
+        ]
+        return sorted(
+            selected,
+            key=lambda track: (
+                parse_position(track.disc_number)[0] or 1,
+                parse_position(track.track_number)[0] or 0,
+                track.filename.casefold(),
+            ),
+        )
+
+    def export_playlist(self) -> None:
+        tracks = self._playlist_tracks()
+        if not tracks:
+            messagebox.showinfo(
+                APP_NAME,
+                "Нет треков для плейлиста. Выберите папку в дереве "
+                "или строки в таблице.",
+                parent=self.root,
+            )
+            return
+        parts = self._folder_parts_from_tree_id(self.tree.focus())
+        assert self.result is not None
+        if parts:
+            folder = self.result.root.joinpath(*parts)
+            initial_dir = folder
+            initial_name = f"{folder.name or 'playlist'}.m3u8"
+        else:
+            initial_dir = self.result.root
+            initial_name = (
+                f"discography_playlist_{datetime.now().strftime('%Y%m%d')}.m3u8"
+            )
+        chosen = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Сохранить плейлист M3U8",
+            initialdir=str(initial_dir),
+            initialfile=initial_name,
+            defaultextension=".m3u8",
+            filetypes=(("Плейлист M3U8", "*.m3u8"), ("Все файлы", "*.*")),
+        )
+        if not chosen:
+            return
+        destination = Path(chosen)
+        try:
+            write_playlist(tracks, destination)
+        except OSError as exc:
+            messagebox.showerror(
+                APP_NAME,
+                f"Не удалось сохранить плейлист.\n\nПричина: {exc}",
+                parent=self.root,
+            )
+            return
+        messagebox.showinfo(
+            APP_NAME,
+            f"Плейлист сохранён: {destination.name}\nТреков: {len(tracks)}",
+            parent=self.root,
         )
 
     def open_export(self) -> None:
