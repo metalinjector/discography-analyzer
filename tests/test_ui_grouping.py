@@ -5,6 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from discography_analyzer.audit_models import (
+    AuditCategory,
+    AuditSeverity,
+    MetadataAuditIssue,
+)
 from discography_analyzer.constants import TABLE_COLUMNS
 from discography_analyzer.models import Track, TrackStatus
 from discography_analyzer.parsing import files_word
@@ -307,6 +312,68 @@ class UiGroupingTests(unittest.TestCase):
         self.assertEqual(
             app.cover_label.options,
             {"image": "", "text": "Обложка не распознана"},
+        )
+
+    def test_tree_labels_use_russian_plural_forms(self) -> None:
+        class FakeTree:
+            def __init__(self) -> None:
+                self.rows: dict[str, dict] = {}
+
+            def configure(self, **_values) -> None:
+                pass
+
+            def column(self, *_args, **_values) -> None:
+                pass
+
+            def heading(self, *_args, **_values) -> None:
+                pass
+
+            def insert(self, _parent, _index, *, iid: str, **values) -> str:
+                self.rows[iid] = values
+                return iid
+
+        def cell(item_id: str, column: str) -> str:
+            values = app.tree.rows[item_id]["values"]
+            return values[[item[0] for item in TABLE_COLUMNS].index(column)]
+
+        members = [
+            track(f"t{number}", TrackStatus.DUPLICATE, related=[])
+            for number in range(5)
+        ]
+        for number, member in enumerate(members):
+            member.relative_folder = f"Folder {number}"
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = SimpleNamespace(root=Path("/music"), completeness_issues=[])
+        app.tree = FakeTree()
+        app._folder_column_width = None
+        app._group_column_width = 300
+        app.group_labels = {}
+        app.group_members = {}
+        app.audit_item_track_ids = {}
+        app.track_by_id = {member.id: member for member in members}
+        app.variation_source_ids = set()
+        app.sort_column = None
+
+        app._insert_folder_tree(members[:2])
+        app._insert_relation_groups([(members[0], members)])
+        app._insert_audit_groups(
+            [
+                MetadataAuditIssue(
+                    id=f"issue-{field}",
+                    track_id="t0",
+                    severity=AuditSeverity.WARNING,
+                    category=AuditCategory.REQUIRED,
+                    field=field,
+                    message="Не заполнено",
+                )
+                for field in ("album_artist", "year")
+            ]
+        )
+
+        self.assertEqual(cell("folder-root::node", "status"), "Папка · 2 файла")
+        self.assertEqual(cell("group::t0", "relative_folder"), "5 папок")
+        self.assertEqual(
+            app.group_labels["audit-group::t0"], "t0.flac · замечаний: 2"
         )
 
     def test_fresh_analysis_starts_with_track_number_order(self) -> None:

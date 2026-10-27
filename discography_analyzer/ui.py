@@ -41,7 +41,7 @@ from .models import (
 )
 from .numbering_dialog import NumberingFixDialog
 from .numbering_fix import NumberingPlan, plan_numbering_fix
-from .parsing import files_word, validate_markers
+from .parsing import files_word, folders_word, validate_markers
 from .scanner import (
     AnalysisStopped,
     NoAudioFilesError,
@@ -1562,7 +1562,7 @@ class DiscographyAnalyzerApp:
                     relative_folder=(
                         next(iter(folders))
                         if len(folders) == 1
-                        else f"{len(folders)} папки"
+                        else f"{len(folders)} {folders_word(len(folders))}"
                     ),
                 ),
                 tags=(group_tag,),
@@ -1646,7 +1646,7 @@ class DiscographyAnalyzerApp:
             )
             safe_fixes = sum(issue.safe_fix for issue in track_issues)
             count = len(track_issues)
-            label = f"{track.filename} · {count} замечаний"
+            label = f"{track.filename} · замечаний: {count}"
             group_id = f"audit-group::{track.id}"
             self.tree.insert(
                 "",
@@ -1797,7 +1797,9 @@ class DiscographyAnalyzerApp:
             "end",
             iid=root_id,
             text=f"📁 {root_name}",
-            values=self._row_values(status=f"Папка · {len(tracks)} файлов"),
+            values=self._row_values(
+                status=f"Папка · {len(tracks)} {files_word(len(tracks))}"
+            ),
             tags=root_tags,
             open=True,
         )
