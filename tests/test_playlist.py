@@ -123,6 +123,18 @@ class PlaylistWriteTests(unittest.TestCase):
         self.assertEqual(destination.read_text(encoding="utf-8"), "старый список")
         self.assertEqual(list(self.folder.glob(".playlist-*.part")), [])
 
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_the_playlist_gets_ordinary_permissions(self) -> None:
+        # mkstemp creates 0600 files; a playlist is an ordinary user file.
+        destination = self.folder / "list.m3u8"
+        previous = os.umask(0o022)
+        try:
+            write_playlist([make_track("1", "Artist/Album")], destination)
+        finally:
+            os.umask(previous)
+
+        self.assertEqual(destination.stat().st_mode & 0o777, 0o644)
+
 
 class PlaylistSelectionTests(unittest.TestCase):
     def app_with(self, tracks: list[Track], focus: str, visible: list[Track]):

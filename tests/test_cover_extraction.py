@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import struct
 import threading
 import unittest
@@ -181,6 +182,22 @@ class CoverExtractionTests(unittest.TestCase):
             sorted(path.name for path in self.folder.iterdir()),
             ["1.flac", "2.flac"],
         )
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_the_cover_file_gets_ordinary_permissions(self) -> None:
+        # mkstemp creates 0600 files, so a media server running as another
+        # user (Plex, Jellyfin) could not read the new cover.jpg.
+        cover = image_bytes("JPEG")
+        make_flac(self.folder / "1.flac", cover)
+        make_flac(self.folder / "2.flac", cover)
+        previous = os.umask(0o022)
+        try:
+            write_covers(self.plan())
+        finally:
+            os.umask(previous)
+
+        mode = (self.folder / "cover.jpg").stat().st_mode & 0o777
+        self.assertEqual(mode, 0o644)
 
     def test_stop_event_interrupts_the_plan(self) -> None:
         make_flac(self.folder / "1.flac")
