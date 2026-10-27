@@ -220,6 +220,56 @@ class UiGroupingTests(unittest.TestCase):
         self.assertTrue(app.tree.stretch)
         self.assertTrue(all(not value for value in app.tree.stretch.values()))
 
+    def test_russian_layout_shortcut_falls_back_to_the_key_code(self) -> None:
+        # Real Windows/Tk 8.6 reports keysym "??" for every Cyrillic letter, so
+        # the keysym bindings above cannot fire; the key code still identifies
+        # the physical key and does not depend on the layout.
+        event = SimpleNamespace(keysym="??", keycode=ord("O"))
+        calls: list[str] = []
+        result = DiscographyAnalyzerApp._shortcut_by_keycode(
+            event, "o", lambda _event: calls.append("folder")
+        )
+
+        self.assertEqual(result, "break")
+        self.assertEqual(calls, ["folder"])
+
+        latin = SimpleNamespace(keysym="o", keycode=ord("O"))
+        ignored = DiscographyAnalyzerApp._shortcut_by_keycode(
+            latin, "o", lambda _event: calls.append("twice")
+        )
+        self.assertIsNone(ignored)
+        self.assertEqual(calls, ["folder"])
+
+        other_key = SimpleNamespace(keysym="??", keycode=ord("E"))
+        self.assertIsNone(
+            DiscographyAnalyzerApp._shortcut_by_keycode(
+                other_key, "o", lambda _event: calls.append("wrong")
+            )
+        )
+        self.assertEqual(calls, ["folder"])
+
+    def test_text_fields_cut_copy_paste_from_key_codes(self) -> None:
+        generated: list[str] = []
+
+        class FakeEntry:
+            def event_generate(self, virtual: str) -> None:
+                generated.append(virtual)
+
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        for keysym, keycode, expected in (
+            ("??", ord("V"), "<<Paste>>"),
+            ("??", ord("C"), "<<Copy>>"),
+            ("??", ord("X"), "<<Cut>>"),
+            ("??", ord("F"), None),
+            ("v", ord("V"), None),
+        ):
+            generated.clear()
+            result = app._text_shortcut_by_keycode(
+                SimpleNamespace(keysym=keysym, keycode=keycode, widget=FakeEntry())
+            )
+            self.assertEqual(generated, [expected] if expected else [])
+            self.assertEqual(result, "break" if expected else None)
+
     def test_shortcuts_work_in_russian_layout_and_with_caps_lock(self) -> None:
         # Tk matches shortcuts by keysym: under the Russian layout the O key
         # reports "Cyrillic_shcha" and under Caps Lock "O", so a plain
@@ -234,6 +284,9 @@ class UiGroupingTests(unittest.TestCase):
 
             def event_add(self, virtual: str, *sequences: str) -> None:
                 self.virtual[virtual] = self.virtual.get(virtual, ()) + sequences
+
+            def bind_class(self, *_args, **_kwargs) -> None:
+                pass
 
         class FakeVar:
             def trace_add(self, *_args) -> None:

@@ -91,6 +91,16 @@ def _control_sequences(letter: str) -> list[str]:
     ]
 
 
+def _needs_keycode_fallback(keysym: str) -> bool:
+    """True when Tk could not name the key (Russian layout on Windows: "??")."""
+    return len(keysym) != 1 or not keysym.isascii()
+
+
+def _keycode_matches(letter: str, keycode: int) -> bool:
+    """Windows virtual-key codes of A-Z equal the uppercase ASCII codes."""
+    return keycode == ord(letter.upper())
+
+
 def _responsive_group_width(viewport_width: int) -> int:
     if viewport_width <= 1:
         return 335
@@ -546,6 +556,32 @@ class DiscographyAnalyzerApp:
         ):
             with contextlib.suppress(tk.TclError):
                 self.root.event_add(virtual, *_russian_control_sequences(letter))
+        # Same fallback for text fields: Tk's virtual events cannot be reached
+        # from a Cyrillic keysym on Windows, so the key code pastes instead.
+        for widget_class in ("Entry", "TEntry", "Text"):
+            with contextlib.suppress(tk.TclError):
+                self.root.bind_class(
+                    widget_class,
+                    "<Control-KeyPress>",
+                    self._text_shortcut_by_keycode,
+                    add="+",
+                )
+
+    TEXT_VIRTUALS = {
+        ord("C"): "<<Copy>>",
+        ord("V"): "<<Paste>>",
+        ord("X"): "<<Cut>>",
+    }
+
+    def _text_shortcut_by_keycode(self, event):
+        if not _needs_keycode_fallback(event.keysym):
+            return None
+        virtual = self.TEXT_VIRTUALS.get(event.keycode)
+        if virtual is None:
+            return None
+        with contextlib.suppress(tk.TclError):
+            event.widget.event_generate(virtual)
+        return "break"
 
     @staticmethod
     def _bind_shortcut(widget, letter: str, callback) -> None:
@@ -553,6 +589,22 @@ class DiscographyAnalyzerApp:
             # A Tk build without the Cyrillic keysym names must still start.
             with contextlib.suppress(tk.TclError):
                 widget.bind(sequence, callback)
+        # Tk 8.6 on Windows reports "??" for every Cyrillic keysym, so the
+        # bindings above never fire in the Russian layout. The physical key is
+        # still known by its virtual-key code, which does not depend on layout.
+        def handler(event, letter=letter, callback=callback):
+            return DiscographyAnalyzerApp._shortcut_by_keycode(event, letter, callback)
+
+        widget.bind("<Control-KeyPress>", handler, add="+")
+
+    @staticmethod
+    def _shortcut_by_keycode(event, letter: str, callback):
+        if not _needs_keycode_fallback(event.keysym):
+            return None
+        if not _keycode_matches(letter, event.keycode):
+            return None
+        callback(event)
+        return "break"
 
     def _focus_filter(self, _event=None) -> str:
         self.filter_entry.focus_set()
