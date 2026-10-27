@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import os
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -23,7 +22,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from .fileops import backup_copy, replace_preserving_times, temporary_copy
+from .fileops import (
+    backup_copy,
+    iter_folders,
+    list_audio_files,
+    replace_preserving_times,
+    temporary_copy,
+)
 from .metadata import (
     embedded_cover,
     front_picture,
@@ -179,6 +184,11 @@ def read_cover_image(path: Path) -> CoverImage:
         data = path.read_bytes()
     except OSError as exc:
         raise ValueError(f"не удалось прочитать файл обложки: {exc}") from exc
+    return cover_image_from_bytes(path, data)
+
+
+def cover_image_from_bytes(path: Path, data: bytes) -> CoverImage:
+    """Validate image bytes; ``path`` names the picture (APEv2 stores the name)."""
     if not data:
         raise ValueError("файл обложки пуст")
     try:
@@ -227,50 +237,11 @@ def inspect_art(path: Path) -> tuple[ArtState, str]:
     return ArtState.PRESENT, ""
 
 
-def _iter_folders(
-    root: Path,
-    include_subfolders: bool,
-    excluded_folders: Iterable[str],
-):
-    if not include_subfolders:
-        yield root
-        return
-    excluded = {
-        name.casefold() for name in excluded_folders if str(name).strip()
-    }
-    for current, directories, _names in os.walk(root):
-        directories[:] = [
-            name
-            for name in directories
-            if name.casefold() not in excluded and not name.startswith(".")
-        ]
-        directories.sort(key=str.casefold)
-        yield Path(current)
-
-
 def _relative(path: Path, root: Path) -> str:
     try:
         return str(path.relative_to(root))
     except ValueError:
         return str(path)
-
-
-def _audio_files(folder: Path, extensions: set[str]) -> list[Path]:
-    try:
-        entries = list(folder.iterdir())
-    except OSError:
-        return []
-    return sorted(
-        (
-            entry
-            for entry in entries
-            # Hidden "._" AppleDouble files are not audio, same as in the scan.
-            if not entry.name.startswith(".")
-            and entry.is_file()
-            and entry.suffix.casefold() in extensions
-        ),
-        key=lambda entry: entry.name.casefold(),
-    )
 
 
 def plan_cover_embedding(
@@ -295,11 +266,11 @@ def plan_cover_embedding(
     files_with_broken_cover = 0
     folders_without_cover = 0
 
-    for folder in _iter_folders(root, include_subfolders, excluded_folders):
+    for folder in iter_folders(root, include_subfolders, excluded_folders):
         if stop_event is not None and stop_event.is_set():
             raise CoverTaskStopped
         folders_scanned += 1
-        audio_files = _audio_files(folder, wanted)
+        audio_files = list_audio_files(folder, wanted)
         if progress is not None:
             progress(files_scanned, folders_scanned, _relative(folder, root))
         if not audio_files:

@@ -77,6 +77,38 @@ def _target_key(tags, field: str) -> str:
     )
 
 
+def write_text_tags(path: Path, changes: dict[str, str]) -> None:
+    """Write ``changes`` (``EASY_TAG_KEYS`` fields) into ``path`` and read them back.
+
+    Callers pass a temporary copy, never the original file.
+    """
+    if mutagen is None:
+        raise RuntimeError("Не установлена библиотека Mutagen")
+    save_options = _save_options(path)
+    audio = mutagen.File(path, easy=True)
+    if audio is None:
+        raise ValueError("формат файла не распознан")
+    if getattr(audio, "tags", None) is None:
+        add_tags = getattr(audio, "add_tags", None)
+        if not callable(add_tags):
+            raise ValueError("формат не поддерживает создание тегов")
+        add_tags()
+    keys = {field: _target_key(audio.tags, field) for field in changes}
+    for field, value in changes.items():
+        audio[keys[field]] = [value]
+    audio.save(**save_options)
+
+    verified = mutagen.File(path, easy=True)
+    if verified is None or getattr(verified, "tags", None) is None:
+        raise ValueError("не удалось повторно прочитать записанные теги")
+    for field, expected in changes.items():
+        values = _text_values(verified.tags.get(keys[field]))
+        if not values or values[0] != expected:
+            raise ValueError(
+                f"проверка тега {keys[field]} после записи не пройдена"
+            )
+
+
 def _write_verified_copy(
     track: Track,
     changes: dict[str, str],
@@ -88,30 +120,7 @@ def _write_verified_copy(
     temporary = temporary_copy(source, prefix=f".{source.stem}-audit-")
     backup_created = False
     try:
-        save_options = _save_options(temporary)
-        audio = mutagen.File(temporary, easy=True)
-        if audio is None:
-            raise ValueError("формат файла не распознан")
-        if getattr(audio, "tags", None) is None:
-            add_tags = getattr(audio, "add_tags", None)
-            if not callable(add_tags):
-                raise ValueError("формат не поддерживает создание тегов")
-            add_tags()
-        keys = {field: _target_key(audio.tags, field) for field in changes}
-        for field, value in changes.items():
-            audio[keys[field]] = [value]
-        audio.save(**save_options)
-
-        verified = mutagen.File(temporary, easy=True)
-        if verified is None or getattr(verified, "tags", None) is None:
-            raise ValueError("не удалось повторно прочитать записанные теги")
-        for field, expected in changes.items():
-            values = _text_values(verified.tags.get(keys[field]))
-            if not values or values[0] != expected:
-                raise ValueError(
-                    f"проверка тега {keys[field]} после записи не пройдена"
-                )
-
+        write_text_tags(temporary, changes)
         if backup_root is not None:
             backup_copy(source, track.root, backup_root)
             backup_created = True

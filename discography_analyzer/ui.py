@@ -743,9 +743,20 @@ class DiscographyAnalyzerApp:
             backup_enabled=self.settings.backup_before_tag_writes,
             on_backup_changed=self._set_backup_preference,
             on_completed=self._utility_completed,
+            selected_folder=self._selected_folder(),
         )
         dialog = UtilitiesDialog(self.root, context)
         self._style_toplevel(dialog.window)
+
+    def _selected_folder(self) -> Path | None:
+        """The folder row in focus, or the folder of the selected track."""
+        if self.result is None:
+            return None
+        parts = self._folder_parts_from_tree_id(self.tree.focus())
+        if parts:
+            return self.result.root.joinpath(*parts)
+        track = self._selected_track()
+        return track.path.parent if track is not None else None
 
     def _utility_completed(self, changed_root: Path) -> None:
         """Re-run the analysis so the table and the audit see the new covers."""

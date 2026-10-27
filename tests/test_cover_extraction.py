@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from discography_analyzer import cover_extraction
+from discography_analyzer import fileops
 from discography_analyzer.cover_extraction import (
     CoverTaskStopped,
     plan_cover_extraction,
@@ -171,7 +171,7 @@ class CoverExtractionTests(unittest.TestCase):
         make_flac(self.folder / "2.flac", cover)
         plan = self.plan()
 
-        with patch.object(cover_extraction.os, "replace", side_effect=OSError("нет места")):
+        with patch.object(fileops.os, "replace", side_effect=OSError("нет места")):
             result = write_covers(plan)
 
         self.assertEqual(result.written, 0)

@@ -363,6 +363,27 @@ class UiGroupingTests(unittest.TestCase):
 
         self.assertEqual(runs, ["analysis", "analysis"])
 
+    def test_utilities_get_the_folder_selected_in_the_main_window(self) -> None:
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = None
+        self.assertIsNone(app._selected_folder())
+
+        app.result = SimpleNamespace(root=Path("/music"))
+        focused = {"id": "folder-path::Metallica/1986 - Master of Puppets"}
+        app.tree = SimpleNamespace(focus=lambda: focused["id"])
+        selected = SimpleNamespace(path=Path("/music/Other/song.flac"))
+        app._selected_track = lambda: selected
+
+        self.assertEqual(
+            app._selected_folder(), Path("/music/Metallica/1986 - Master of Puppets")
+        )
+        # A track row: the track's own folder.
+        focused["id"] = "track-row"
+        self.assertEqual(app._selected_folder(), Path("/music/Other"))
+        # The root row names the whole collection, which is the default anyway.
+        focused["id"] = "folder-root::node"
+        self.assertEqual(app._selected_folder(), Path("/music/Other"))
+
     def test_cover_panel_never_keeps_the_previous_cover(self) -> None:
         # A cover above Pillow's pixel limit raised DecompressionBombError,
         # which escaped the handler and left the previous track's picture.
