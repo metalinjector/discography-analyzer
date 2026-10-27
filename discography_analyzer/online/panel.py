@@ -795,7 +795,8 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             return
         provider = self._provider(candidate.release.provider)
         self.details_loading = candidate
-        self.status_var.set("Загрузка трек-листа...")
+        if not self.busy:  # a search or a write keeps its own status line
+            self.status_var.set("Загрузка трек-листа...")
 
         def run() -> None:
             try:
