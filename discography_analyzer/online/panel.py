@@ -87,6 +87,9 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.root_var = tk.StringVar(value=str(folder) if folder else "")
         self.include_subfolders_var = tk.BooleanVar(value=self.context.include_subfolders)
         self.provider_var = tk.StringVar(value=provider_class(self.preferences.provider).name)
+        self.mode_var = tk.StringVar(
+            value="auto" if self.preferences.auto_select else "manual"
+        )
         country = self.preferences.country if self.preferences.country in STOREFRONTS else "US"
         self.country_var = tk.StringVar(value=country)
         self.token_var = tk.StringVar(value=self.preferences.discogs_token)
@@ -126,6 +129,21 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.provider_line, text="Прокси...", command=self._open_proxy
         )
         self.proxy_button.pack(side="right")
+        ttk.Label(self.provider_line, text="Выбор релиза:").pack(side="left")
+        ttk.Radiobutton(
+            self.provider_line,
+            text="Авто",
+            value="auto",
+            variable=self.mode_var,
+            command=self._mode_changed,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Radiobutton(
+            self.provider_line,
+            text="Вручную",
+            value="manual",
+            variable=self.mode_var,
+            command=self._mode_changed,
+        ).pack(side="left", padx=(4, 10))
         ttk.Label(self.provider_line, textvariable=self.proxy_var).pack(
             side="right", padx=(0, 8)
         )
@@ -328,6 +346,16 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self._clear_results()
             self.status_var.set("Сервис изменён — нажмите «Найти совпадения»")
 
+    def _mode_changed(self) -> None:
+        self.preferences.selection_mode = self.mode_var.get()
+        self._save_preferences()
+        if self.mode_var.get() == "manual":
+            self.status_var.set(
+                "Выбор вручную: откройте альбом в списке и выберите вариант"
+            )
+        else:
+            self.status_var.set("Авто: подходящий релиз выбирается сам")
+
     def _options_changed(self) -> None:
         for row in self.lookups:
             self._refresh_album(row)
@@ -345,6 +373,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             proxy_mode=self.proxy.mode,
             proxy_url=self.proxy.url,
             proxy_services=sorted(self.proxy.services),
+            selection_mode=self.mode_var.get(),
         )
         # An unwritable settings folder must not stop the utility.
         with contextlib.suppress(OSError):
@@ -659,12 +688,19 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             )
             return
         provider = self._provider(self.result_provider or self._provider_class().key)
+        auto_choose = self.mode_var.get() == "auto"
         # Remembered for the next «Найти совпадения» (the one after a write too).
         self.manual_queries[lookup.album.folder] = query
 
         def run() -> None:
             try:
-                result = look_up(provider, lookup.album, query, cache=self.cache)
+                result = look_up(
+                    provider,
+                    lookup.album,
+                    query,
+                    cache=self.cache,
+                    auto_choose=auto_choose,
+                )
             except LookupStopped:
                 self.post("stopped")
                 return
@@ -710,6 +746,8 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         excluded = self.context.excluded_folders
         extensions = self.context.extensions
         queries = dict(self.manual_queries)
+        # Tk must be read on the main thread; the worker only gets the value.
+        auto_choose = self.mode_var.get() == "auto"
         check_service = provider.key == "deezer" and provider.key not in self.warned_services
 
         def run() -> None:
@@ -734,7 +772,13 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
                         album.guess.artist, album.guess.title
                     )
                     try:
-                        lookup = look_up(provider, album, query, cache=self.cache)
+                        lookup = look_up(
+                            provider,
+                            album,
+                            query,
+                            cache=self.cache,
+                            auto_choose=auto_choose,
+                        )
                         failures = 0
                     except LookupStopped:
                         raise
