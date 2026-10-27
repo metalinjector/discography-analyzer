@@ -1,8 +1,7 @@
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-
-import tomllib
 
 import discography_analyzer
 from discography_analyzer.audit_dialog import AuditFixDialog
@@ -14,9 +13,11 @@ class VersionTests(unittest.TestCase):
     def test_package_version_matches_pyproject(self) -> None:
         # __init__ reads the installed metadata and falls back to the source
         # constant; a stale literal (1.7.0 next to 1.9.0) must not come back.
-        declared = tomllib.loads(
-            (PROJECT / "pyproject.toml").read_text(encoding="utf-8")
-        )["project"]["version"]
+        # tomllib needs Python 3.11 and CI runs 3.10, so read the line itself.
+        pyproject = (PROJECT / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE)
+        self.assertIsNotNone(match)
+        declared = match.group(1)
         self.assertEqual(discography_analyzer.__version__, declared)
         self.assertRegex(discography_analyzer.__version__, r"^\d+\.\d+\.\d+$")
 
