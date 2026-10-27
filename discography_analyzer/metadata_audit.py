@@ -37,6 +37,9 @@ EXTERNAL_COVER_STEMS = {
     "album art",
 }
 EXTERNAL_COVER_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+# A folder may contain several art files; "cover.*" wins over "folder.*".
+COVER_STEM_ORDER = ("cover", "folder", "front", "albumart", "album art")
+SUFFIX_ORDER = (".jpg", ".jpeg", ".png", ".webp")
 TEXT_FIELDS = (
     "title",
     "artist",
@@ -90,19 +93,42 @@ def _dominant_value(values: list[str]) -> str | None:
     return next(value for value in normalized if value.casefold() == key)
 
 
-def _find_external_cover(folder: Path) -> Path | None:
+def find_folder_cover(folder: Path) -> Path | None:
+    """Return the cover image of ``folder``, preferring ``cover`` over ``folder``.
+
+    The audit suggestion, the folder summary and the cover utility all use
+    this one choice, so they always name the same picture. Matching is
+    case-insensitive so ``Cover.JPG`` on a case-sensitive volume is found
+    too. Stems outside the known list are ignored on purpose: a random
+    ``back.jpg`` is not necessarily the album cover.
+    """
     try:
-        candidates = sorted(folder.iterdir(), key=lambda path: path.name.casefold())
+        entries = [
+            entry
+            for entry in folder.iterdir()
+            if entry.is_file() and entry.suffix.casefold() in EXTERNAL_COVER_SUFFIXES
+        ]
     except OSError:
         return None
-    for path in candidates:
-        if (
-            path.is_file()
-            and path.suffix.casefold() in EXTERNAL_COVER_SUFFIXES
-            and path.stem.casefold() in EXTERNAL_COVER_STEMS
-        ):
-            return path
-    return None
+    ranked: list[tuple[int, int, str, Path]] = []
+    for entry in entries:
+        stem = entry.stem.casefold()
+        if stem not in EXTERNAL_COVER_STEMS:
+            continue
+        suffix = entry.suffix.casefold()
+        suffix_rank = (
+            SUFFIX_ORDER.index(suffix) if suffix in SUFFIX_ORDER else len(SUFFIX_ORDER)
+        )
+        stem_rank = (
+            COVER_STEM_ORDER.index(stem)
+            if stem in COVER_STEM_ORDER
+            else len(COVER_STEM_ORDER)
+        )
+        ranked.append((stem_rank, suffix_rank, entry.name.casefold(), entry))
+    if not ranked:
+        return None
+    ranked.sort()
+    return ranked[0][3]
 
 
 def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
@@ -340,7 +366,7 @@ def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
         elif not track.cover_hash:
             folder = track.path.parent
             if folder not in external_covers:
-                external_covers[folder] = _find_external_cover(folder)
+                external_covers[folder] = find_folder_cover(folder)
             external = external_covers[folder]
             suggestion = (
                 f"Встроить файл {external.name}" if external is not None else ""

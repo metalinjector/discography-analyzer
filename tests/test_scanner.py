@@ -30,6 +30,36 @@ class ScannerTests(unittest.TestCase):
             )
             self.assertEqual(folders, 1)
 
+    def test_hidden_files_are_not_collected(self) -> None:
+        # macOS leaves AppleDouble "._" companions on FAT/exFAT/SMB volumes and
+        # an interrupted tag write leaves its hidden temporary copy behind.
+        # Both used to become tracks: the temporary copy even won the copy plan
+        # over the real file, and the AppleDouble file was copied as unique.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "01 Song.flac",
+                "._01 Song.flac",
+                ".01 Song-audit-k3j2h1.flac",
+            ):
+                (root / name).write_bytes(b"")
+
+            for include_subfolders in (True, False):
+                with self.subTest(include_subfolders=include_subfolders):
+                    files, _folders = _collect_files(
+                        root=root,
+                        include_subfolders=include_subfolders,
+                        excluded_folders=[],
+                        selected_extensions={".flac"},
+                        stop_event=threading.Event(),
+                        progress=lambda *_args: None,
+                    )
+
+                    self.assertEqual(
+                        [path.name for path in files],
+                        ["01 Song.flac"],
+                    )
+
     def test_unreadable_file_does_not_discard_readable_results(self) -> None:
         root = Path("/music")
         unreadable = root / "unreadable.mp3"

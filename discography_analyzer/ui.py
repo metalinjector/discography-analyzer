@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageTk, UnidentifiedImageError
+from PIL import Image, ImageTk
 
 from .audit_dialog import AuditFixDialog
 from .audit_models import AuditSeverity, MetadataAuditIssue
@@ -32,16 +32,18 @@ from .constants import (
 from .copy_dialog import UniqueCopyDialog
 from .exporter import export_xlsx
 from .metadata import MetadataDependencyError, read_embedded_cover
+from .metadata_audit import find_folder_cover
 from .models import (
     AlbumCompletenessIssue,
     AnalysisResult,
     Track,
     TrackStatus,
     album_completeness_text,
+    folder_summary_text,
 )
 from .numbering_dialog import NumberingFixDialog
 from .numbering_fix import NumberingPlan, plan_numbering_fix
-from .parsing import files_word, validate_markers
+from .parsing import files_word, folders_word, validate_markers
 from .scanner import (
     AnalysisStopped,
     NoAudioFilesError,
@@ -60,6 +62,43 @@ def _files_word(count: int) -> str:
     if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
         return "файла"
     return "файлов"
+
+
+# The same physical key in the Russian (ЙЦУКЕН) layout. Tk matches shortcuts
+# by keysym, so a <Control-o> binding never fires while that layout is active
+# (the key reports "Cyrillic_shcha") nor under Caps Lock (it reports "O").
+RUSSIAN_LAYOUT_KEYS = {
+    "c": "es",
+    "e": "u",
+    "f": "a",
+    "o": "shcha",
+    "v": "em",
+    "x": "che",
+}
+
+
+def _russian_control_sequences(letter: str) -> list[str]:
+    name = RUSSIAN_LAYOUT_KEYS[letter]
+    return [f"<Control-Cyrillic_{name}>", f"<Control-Cyrillic_{name.upper()}>"]
+
+
+def _control_sequences(letter: str) -> list[str]:
+    """Ctrl+<letter> in both cases (Caps Lock) and in the Russian layout."""
+    return [
+        f"<Control-{letter}>",
+        f"<Control-{letter.upper()}>",
+        *_russian_control_sequences(letter),
+    ]
+
+
+def _needs_keycode_fallback(keysym: str) -> bool:
+    """True when Tk could not name the key (Russian layout on Windows: "??")."""
+    return len(keysym) != 1 or not keysym.isascii()
+
+
+def _keycode_matches(letter: str, keycode: int) -> bool:
+    """Windows virtual-key codes of A-Z equal the uppercase ASCII codes."""
+    return keycode == ord(letter.upper())
 
 
 def _responsive_group_width(viewport_width: int) -> int:
@@ -374,9 +413,10 @@ class DiscographyAnalyzerApp:
         ttk.Label(controls, text="Фильтр", style="Toolbar.TLabel").grid(
             row=0, column=8, padx=(12, 5)
         )
-        ttk.Entry(controls, textvariable=self.filter_var, width=26).grid(
-            row=0, column=9
+        self.filter_entry = ttk.Entry(
+            controls, textvariable=self.filter_var, width=26
         )
+        self.filter_entry.grid(row=0, column=9)
         ttk.Button(
             controls,
             text="×",
@@ -502,9 +542,74 @@ class DiscographyAnalyzerApp:
             self._remember_column_widths,
             add="+",
         )
-        self.root.bind("<Control-o>", lambda _event: self.choose_folder())
-        self.root.bind("<Control-e>", lambda _event: self.open_export())
+        self._bind_shortcut(self.root, "o", lambda _event: self.choose_folder())
+        self._bind_shortcut(self.root, "e", lambda _event: self.open_export())
+        self._bind_shortcut(self.root, "f", self._focus_filter)
+        self._bind_shortcut(self.tree, "c", lambda _event: self.copy_selected())
+        self.filter_entry.bind("<Escape>", lambda _event: self.filter_var.set(""))
         self.root.bind("<F5>", lambda _event: self.start_analysis())
+        # Text fields: Tk's own Cut/Copy/Paste events know only Latin keysyms.
+        for virtual, letter in (
+            ("<<Cut>>", "x"),
+            ("<<Copy>>", "c"),
+            ("<<Paste>>", "v"),
+        ):
+            with contextlib.suppress(tk.TclError):
+                self.root.event_add(virtual, *_russian_control_sequences(letter))
+        # Same fallback for text fields: Tk's virtual events cannot be reached
+        # from a Cyrillic keysym on Windows, so the key code pastes instead.
+        for widget_class in ("Entry", "TEntry", "Text"):
+            with contextlib.suppress(tk.TclError):
+                self.root.bind_class(
+                    widget_class,
+                    "<Control-KeyPress>",
+                    self._text_shortcut_by_keycode,
+                    add="+",
+                )
+
+    TEXT_VIRTUALS = {
+        ord("C"): "<<Copy>>",
+        ord("V"): "<<Paste>>",
+        ord("X"): "<<Cut>>",
+    }
+
+    def _text_shortcut_by_keycode(self, event):
+        if not _needs_keycode_fallback(event.keysym):
+            return None
+        virtual = self.TEXT_VIRTUALS.get(event.keycode)
+        if virtual is None:
+            return None
+        with contextlib.suppress(tk.TclError):
+            event.widget.event_generate(virtual)
+        return "break"
+
+    @staticmethod
+    def _bind_shortcut(widget, letter: str, callback) -> None:
+        for sequence in _control_sequences(letter):
+            # A Tk build without the Cyrillic keysym names must still start.
+            with contextlib.suppress(tk.TclError):
+                widget.bind(sequence, callback)
+        # Tk 8.6 on Windows reports "??" for every Cyrillic keysym, so the
+        # bindings above never fire in the Russian layout. The physical key is
+        # still known by its virtual-key code, which does not depend on layout.
+        def handler(event, letter=letter, callback=callback):
+            return DiscographyAnalyzerApp._shortcut_by_keycode(event, letter, callback)
+
+        widget.bind("<Control-KeyPress>", handler, add="+")
+
+    @staticmethod
+    def _shortcut_by_keycode(event, letter: str, callback):
+        if not _needs_keycode_fallback(event.keysym):
+            return None
+        if not _keycode_matches(letter, event.keycode):
+            return None
+        callback(event)
+        return "break"
+
+    def _focus_filter(self, _event=None) -> str:
+        self.filter_entry.focus_set()
+        self.filter_entry.select_range(0, "end")
+        return "break"
 
     def _schedule_filter(self) -> None:
         if self._filter_job is not None:
@@ -641,10 +746,11 @@ class DiscographyAnalyzerApp:
         """Re-run the analysis so the table and the audit see the new covers."""
         if self.result is None:
             return
-        analysed_root = self.result.root
-        try:
-            changed_root.resolve().relative_to(analysed_root.resolve())
-        except ValueError:
+        analysed = self.result.root.resolve()
+        changed = changed_root.resolve()
+        # Either folder may contain the other: a run on the parent of the
+        # analysed folder changed the analysed files too.
+        if not (changed.is_relative_to(analysed) or analysed.is_relative_to(changed)):
             return
         if self.worker and self.worker.is_alive():
             return
@@ -990,6 +1096,8 @@ class DiscographyAnalyzerApp:
         )
         # A folder whose release is missing files according to the tags: dark
         # red, almost burgundy, so it is visible without opening the folder.
+        # Such a row carries this tag alone: ttk gives tags created earlier
+        # (Folder) priority whatever their order in the row's tag list.
         self.tree.tag_configure(
             "FolderGap",
             background="#5a1c1c" if dark else "#591a1a",
@@ -1510,7 +1618,7 @@ class DiscographyAnalyzerApp:
                     relative_folder=(
                         next(iter(folders))
                         if len(folders) == 1
-                        else f"{len(folders)} папки"
+                        else f"{len(folders)} {folders_word(len(folders))}"
                     ),
                 ),
                 tags=(group_tag,),
@@ -1594,7 +1702,7 @@ class DiscographyAnalyzerApp:
             )
             safe_fixes = sum(issue.safe_fix for issue in track_issues)
             count = len(track_issues)
-            label = f"{track.filename} · {count} замечаний"
+            label = f"{track.filename} · замечаний: {count}"
             group_id = f"audit-group::{track.id}"
             self.tree.insert(
                 "",
@@ -1739,13 +1847,15 @@ class DiscographyAnalyzerApp:
         root_id = "folder-root::node"
         root_name = self.result.root.name or str(self.result.root)
         folders_with_gaps = self._folders_with_missing_numbers()
-        root_tags = ("Folder", "FolderGap") if () in folders_with_gaps else ("Folder",)
+        root_tags = ("FolderGap",) if () in folders_with_gaps else ("Folder",)
         self.tree.insert(
             "",
             "end",
             iid=root_id,
             text=f"📁 {root_name}",
-            values=self._row_values(status=f"Папка · {len(tracks)} файлов"),
+            values=self._row_values(
+                status=f"Папка · {len(tracks)} {files_word(len(tracks))}"
+            ),
             tags=root_tags,
             open=True,
         )
@@ -1757,11 +1867,7 @@ class DiscographyAnalyzerApp:
             parent_parts = parts[:-1]
             parent = ensure_folder(parent_parts)
             item_id = "folder-path::" + "/".join(parts)
-            tags = (
-                ("Folder", "FolderGap")
-                if parts in folders_with_gaps
-                else ("Folder",)
-            )
+            tags = ("FolderGap",) if parts in folders_with_gaps else ("Folder",)
             self.tree.insert(
                 parent,
                 "end",
@@ -1920,6 +2026,10 @@ class DiscographyAnalyzerApp:
         if focused in self.group_members:
             self._show_group_in_panel(focused)
             return
+        folder_parts = self._folder_parts_from_tree_id(focused)
+        if folder_parts is not None:
+            self._show_folder_in_panel(folder_parts)
+            return
         track = self._selected_track()
         if track:
             self._show_track_in_panel(track)
@@ -1985,6 +2095,48 @@ class DiscographyAnalyzerApp:
             )
         self._set_text(self.info_text, "\n".join(lines))
         self._load_cover(track, self.cover_label, 190)
+
+    def _show_folder_in_panel(self, parts: tuple[str, ...]) -> None:
+        """Summary of a folder row in the tree: its album or whole subtree."""
+        if not self.result:
+            return
+        result = self.result
+        inside = {
+            folder
+            for folder in {track.relative_folder for track in result.tracks}
+            if self._folder_parts(folder)[: len(parts)] == parts
+        }
+        tracks = [track for track in result.tracks if track.relative_folder in inside]
+        track_ids = {track.id for track in tracks}
+        cover_file = find_folder_cover(result.root.joinpath(*parts))
+        self._set_text(
+            self.info_text,
+            folder_summary_text(
+                parts[-1] if parts else (result.root.name or str(result.root)),
+                str(Path(*parts)) if parts else "(корень)",
+                tracks,
+                [
+                    issue
+                    for issue in result.completeness_issues
+                    if issue.relative_folder in inside
+                ],
+                [issue for issue in result.audit_issues if issue.track_id in track_ids],
+                cover_file.name if cover_file else "",
+            ),
+        )
+        with_cover = next(
+            (
+                track
+                for track in sorted(tracks, key=self._folder_sort_key)
+                if track.cover_hash and not track.cover_error
+            ),
+            None,
+        )
+        if with_cover is not None:
+            self._load_cover(with_cover, self.cover_label, 190)
+        else:
+            self.cover_photo = None
+            self.cover_label.configure(image="", text="Встроенной обложки\nв папке нет")
 
     def _show_group_in_panel(self, group_id: str) -> None:
         members = [
@@ -2174,7 +2326,9 @@ class DiscographyAnalyzerApp:
             label.image = photo
             if label is self.cover_label:
                 self.cover_photo = photo
-        except (UnidentifiedImageError, OSError):
+        except Exception:
+            # Pillow also raises DecompressionBombError and SyntaxError for
+            # broken pictures; the panel must not keep the previous cover.
             label.configure(image="", text="Обложка не распознана")
 
     def _show_context_menu(self, event) -> None:

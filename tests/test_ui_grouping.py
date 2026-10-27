@@ -1,10 +1,17 @@
+import struct
 import unittest
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from discography_analyzer.audit_models import (
+    AuditCategory,
+    AuditSeverity,
+    MetadataAuditIssue,
+)
 from discography_analyzer.constants import TABLE_COLUMNS
-from discography_analyzer.models import Track, TrackStatus
+from discography_analyzer.models import AlbumCompletenessIssue, Track, TrackStatus
 from discography_analyzer.parsing import files_word
 from discography_analyzer.ui import (
     DiscographyAnalyzerApp,
@@ -213,6 +220,268 @@ class UiGroupingTests(unittest.TestCase):
         self.assertTrue(app.tree.stretch)
         self.assertTrue(all(not value for value in app.tree.stretch.values()))
 
+    def test_russian_layout_shortcut_falls_back_to_the_key_code(self) -> None:
+        # Real Windows/Tk 8.6 reports keysym "??" for every Cyrillic letter, so
+        # the keysym bindings above cannot fire; the key code still identifies
+        # the physical key and does not depend on the layout.
+        event = SimpleNamespace(keysym="??", keycode=ord("O"))
+        calls: list[str] = []
+        result = DiscographyAnalyzerApp._shortcut_by_keycode(
+            event, "o", lambda _event: calls.append("folder")
+        )
+
+        self.assertEqual(result, "break")
+        self.assertEqual(calls, ["folder"])
+
+        latin = SimpleNamespace(keysym="o", keycode=ord("O"))
+        ignored = DiscographyAnalyzerApp._shortcut_by_keycode(
+            latin, "o", lambda _event: calls.append("twice")
+        )
+        self.assertIsNone(ignored)
+        self.assertEqual(calls, ["folder"])
+
+        other_key = SimpleNamespace(keysym="??", keycode=ord("E"))
+        self.assertIsNone(
+            DiscographyAnalyzerApp._shortcut_by_keycode(
+                other_key, "o", lambda _event: calls.append("wrong")
+            )
+        )
+        self.assertEqual(calls, ["folder"])
+
+    def test_text_fields_cut_copy_paste_from_key_codes(self) -> None:
+        generated: list[str] = []
+
+        class FakeEntry:
+            def event_generate(self, virtual: str) -> None:
+                generated.append(virtual)
+
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        for keysym, keycode, expected in (
+            ("??", ord("V"), "<<Paste>>"),
+            ("??", ord("C"), "<<Copy>>"),
+            ("??", ord("X"), "<<Cut>>"),
+            ("??", ord("F"), None),
+            ("v", ord("V"), None),
+        ):
+            generated.clear()
+            result = app._text_shortcut_by_keycode(
+                SimpleNamespace(keysym=keysym, keycode=keycode, widget=FakeEntry())
+            )
+            self.assertEqual(generated, [expected] if expected else [])
+            self.assertEqual(result, "break" if expected else None)
+
+    def test_shortcuts_work_in_russian_layout_and_with_caps_lock(self) -> None:
+        # Tk matches shortcuts by keysym: under the Russian layout the O key
+        # reports "Cyrillic_shcha" and under Caps Lock "O", so a plain
+        # <Control-o> binding silently did nothing in both cases.
+        class FakeWidget:
+            def __init__(self) -> None:
+                self.bindings: dict[str, object] = {}
+                self.virtual: dict[str, tuple[str, ...]] = {}
+
+            def bind(self, sequence: str, callback, add=None) -> None:
+                self.bindings[sequence] = callback
+
+            def event_add(self, virtual: str, *sequences: str) -> None:
+                self.virtual[virtual] = self.virtual.get(virtual, ()) + sequences
+
+            def bind_class(self, *_args, **_kwargs) -> None:
+                pass
+
+        class FakeVar:
+            def trace_add(self, *_args) -> None:
+                pass
+
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.root = FakeWidget()
+        app.tree = FakeWidget()
+        app.filter_entry = FakeWidget()
+        app.filter_var = FakeVar()
+        calls: list[str] = []
+        app.choose_folder = lambda: calls.append("folder")
+        app.open_export = lambda: calls.append("export")
+        app.copy_selected = lambda: calls.append("copy")
+
+        app._bind_actions()
+        for keysym in ("o", "O", "Cyrillic_shcha", "Cyrillic_SHCHA"):
+            app.root.bindings[f"<Control-{keysym}>"](None)
+        app.root.bindings["<Control-Cyrillic_u>"](None)
+        app.tree.bindings["<Control-Cyrillic_es>"](None)
+
+        self.assertEqual(calls, ["folder"] * 4 + ["export", "copy"])
+        self.assertIn("<Control-Cyrillic_a>", app.root.bindings)
+        self.assertIn("<Escape>", app.filter_entry.bindings)
+        # Text fields: Ctrl+V/C/X in the Russian layout reach Tk's own events.
+        self.assertIn("<Control-Cyrillic_em>", app.root.virtual["<<Paste>>"])
+        self.assertIn("<Control-Cyrillic_es>", app.root.virtual["<<Copy>>"])
+        self.assertIn("<Control-Cyrillic_che>", app.root.virtual["<<Cut>>"])
+
+    def test_utility_run_on_a_parent_folder_refreshes_the_analysis(self) -> None:
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = SimpleNamespace(root=Path("/music/Artist"))
+        app.worker = None
+        runs: list[str] = []
+        app.start_analysis = lambda: runs.append("analysis")
+
+        # The parent of the analysed folder contains the analysed files too.
+        app._utility_completed(Path("/music"))
+        app._utility_completed(Path("/music/Artist/Album"))
+        app._utility_completed(Path("/other"))
+
+        self.assertEqual(runs, ["analysis", "analysis"])
+
+    def test_cover_panel_never_keeps_the_previous_cover(self) -> None:
+        # A cover above Pillow's pixel limit raised DecompressionBombError,
+        # which escaped the handler and left the previous track's picture.
+        class FakeLabel:
+            def __init__(self) -> None:
+                self.options = {"image": "previous track", "text": ""}
+
+            def configure(self, **values) -> None:
+                self.options.update(values)
+
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            crc = struct.pack(">I", zlib.crc32(kind + data))
+            return struct.pack(">I", len(data)) + kind + data + crc
+
+        header = struct.pack(">IIBBBBB", 20000, 20000, 8, 2, 0, 0, 0)
+        bomb = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(b"\x00" * 10))
+            + chunk(b"IEND", b"")
+        )
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.cover_label = FakeLabel()
+
+        with patch(
+            "discography_analyzer.ui.read_embedded_cover",
+            return_value=(bomb, "image/png", ""),
+        ):
+            app._load_cover(
+                SimpleNamespace(path=Path("/music/x.flac")), app.cover_label, 190
+            )
+
+        self.assertEqual(
+            app.cover_label.options,
+            {"image": "", "text": "Обложка не распознана"},
+        )
+
+    def test_tree_labels_use_russian_plural_forms(self) -> None:
+        class FakeTree:
+            def __init__(self) -> None:
+                self.rows: dict[str, dict] = {}
+
+            def configure(self, **_values) -> None:
+                pass
+
+            def column(self, *_args, **_values) -> None:
+                pass
+
+            def heading(self, *_args, **_values) -> None:
+                pass
+
+            def insert(self, _parent, _index, *, iid: str, **values) -> str:
+                self.rows[iid] = values
+                return iid
+
+        def cell(item_id: str, column: str) -> str:
+            values = app.tree.rows[item_id]["values"]
+            return values[[item[0] for item in TABLE_COLUMNS].index(column)]
+
+        members = [
+            track(f"t{number}", TrackStatus.DUPLICATE, related=[])
+            for number in range(5)
+        ]
+        for number, member in enumerate(members):
+            member.relative_folder = f"Folder {number}"
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = SimpleNamespace(root=Path("/music"), completeness_issues=[])
+        app.tree = FakeTree()
+        app._folder_column_width = None
+        app._group_column_width = 300
+        app.group_labels = {}
+        app.group_members = {}
+        app.audit_item_track_ids = {}
+        app.track_by_id = {member.id: member for member in members}
+        app.variation_source_ids = set()
+        app.sort_column = None
+
+        app._insert_folder_tree(members[:2])
+        app._insert_relation_groups([(members[0], members)])
+        app._insert_audit_groups(
+            [
+                MetadataAuditIssue(
+                    id=f"issue-{field}",
+                    track_id="t0",
+                    severity=AuditSeverity.WARNING,
+                    category=AuditCategory.REQUIRED,
+                    field=field,
+                    message="Не заполнено",
+                )
+                for field in ("album_artist", "year")
+            ]
+        )
+
+        self.assertEqual(cell("folder-root::node", "status"), "Папка · 2 файла")
+        self.assertEqual(cell("group::t0", "relative_folder"), "5 папок")
+        self.assertEqual(
+            app.group_labels["audit-group::t0"], "t0.flac · замечаний: 2"
+        )
+
+    def test_selecting_a_folder_row_shows_its_summary(self) -> None:
+        # Selecting a folder in the default «По папкам» tree used to leave the
+        # panel on the previously selected track and its cover.
+        class FakeTree:
+            def focus(self) -> str:
+                return "folder-path::Artist/Album"
+
+            def selection(self) -> tuple[str, ...]:
+                return ("folder-path::Artist/Album",)
+
+        class FakeText:
+            def __init__(self) -> None:
+                self.text = "previous track"
+
+            def configure(self, **_values) -> None:
+                pass
+
+            def delete(self, *_args) -> None:
+                self.text = ""
+
+            def insert(self, _index, text: str) -> None:
+                self.text += text
+
+        inside = track("inside", TrackStatus.UNIQUE, related=[])
+        inside.relative_folder = str(Path("Artist", "Album"))
+        inside.cover_hash = "front"
+        outside = track("outside", TrackStatus.UNIQUE, related=[])
+        outside.relative_folder = "Other"
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.tree = FakeTree()
+        app.info_text = FakeText()
+        app.result = SimpleNamespace(
+            root=Path("/music"),
+            tracks=[inside, outside],
+            completeness_issues=[],
+            audit_issues=[],
+        )
+        app.track_by_id = {item.id: item for item in (inside, outside)}
+        app.audit_issue_by_id = {}
+        app.audit_item_track_ids = {}
+        app.group_members = {}
+        app._refresh_numbering_button = lambda: None
+        loaded: list[str] = []
+        app._load_cover = lambda item, _label, _size: loaded.append(item.id)
+        app.cover_label = object()
+
+        with patch("discography_analyzer.ui.find_folder_cover", return_value=None):
+            app._selection_changed()
+
+        self.assertTrue(app.info_text.text.startswith("ПАПКА\nAlbum\n"))
+        self.assertIn("Файлов: 1", app.info_text.text.splitlines())
+        self.assertEqual(loaded, ["inside"])
+
     def test_fresh_analysis_starts_with_track_number_order(self) -> None:
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
         app.sort_column = "title"
@@ -391,6 +660,55 @@ class UiGroupingTests(unittest.TestCase):
             app._folders_with_missing_numbers(),
             {("A", "B"), ()},
         )
+
+    def test_gap_folder_rows_carry_only_the_gap_tag(self) -> None:
+        # ttk resolves options of several tags by tag creation order, not by
+        # the order in the row's list (ttkTagSet.c, Tk 8.6.13-8.6.15): with
+        # ("Folder", "FolderGap") the earlier-created Folder background won
+        # and the dark-red highlight of 1.8.4 never showed.
+        class FakeTree:
+            def __init__(self) -> None:
+                self.tags: dict[str, tuple[str, ...]] = {}
+
+            def configure(self, **_values) -> None:
+                pass
+
+            def column(self, *_args, **_values) -> None:
+                pass
+
+            def insert(self, _parent, _index, *, iid: str, **values) -> str:
+                self.tags[iid] = tuple(values.get("tags", ()))
+                return iid
+
+        def gap(folder: str) -> AlbumCompletenessIssue:
+            return AlbumCompletenessIssue(
+                id=f"gap-{folder}",
+                relative_folder=folder,
+                album="Album",
+                disc=1,
+                present_numbers=(1, 2),
+                missing_numbers=(3,),
+                expected_total=3,
+                total_from_tags=True,
+            )
+
+        in_album = track("album", TrackStatus.UNIQUE, related=[])
+        in_album.relative_folder = str(Path("Artist", "Album"))
+        in_root = track("root", TrackStatus.UNIQUE, related=[])
+        in_root.relative_folder = "(корень)"
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.result = SimpleNamespace(
+            root=Path("/music"),
+            completeness_issues=[gap(in_album.relative_folder), gap("(корень)")],
+        )
+        app.tree = FakeTree()
+        app._folder_column_width = None
+
+        app._insert_folder_tree([in_root, in_album])
+
+        self.assertEqual(app.tree.tags["folder-root::node"], ("FolderGap",))
+        self.assertEqual(app.tree.tags["folder-path::Artist/Album"], ("FolderGap",))
+        self.assertEqual(app.tree.tags["folder-path::Artist"], ("Folder",))
 
     def test_track_number_is_second_column_and_sorts_numerically(self) -> None:
         self.assertEqual(TABLE_COLUMNS[1][0], "track_number")

@@ -130,6 +130,23 @@ class CoverPlanTests(unittest.TestCase):
 
         self.assertEqual([folder.relative_folder for folder in plan.folders], ["Keep"])
 
+    def test_hidden_audio_files_are_ignored(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cover.jpg").write_bytes(image_bytes())
+            make_flac(root / "one.flac")
+            # AppleDouble companion written by macOS: not audio at all.
+            (root / "._one.flac").write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 80)
+
+            plan = plan_cover_embedding(root, extensions={".flac"})
+
+        self.assertEqual(plan.files_scanned, 1)
+        self.assertEqual(plan.problems, ())
+        self.assertEqual(
+            [target.path.name for target in plan.folders[0].targets],
+            ["one.flac"],
+        )
+
     def test_broken_art_is_replaced_only_on_request(self) -> None:
         from mutagen.id3 import APIC, ID3
 
@@ -241,6 +258,64 @@ class CoverEmbedTests(unittest.TestCase):
         self.assertEqual(tags["TIT2"].text, ["Song"])
         self.assertEqual(tags.getall("APIC")[0].mime, "image/png")
         self.assertEqual(tags.getall("APIC")[0].data, image_bytes("PNG"))
+
+    def test_replacing_a_broken_flac_cover_keeps_other_pictures(self) -> None:
+        # «Заменять повреждённые обложки» used to wipe every embedded picture:
+        # a valid back cover or booklet scan was lost with the broken front.
+        from mutagen.flac import FLAC, Picture
+
+        back_bytes = image_bytes(color="#2f75b5")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cover.jpg").write_bytes(image_bytes())
+            make_flac(root / "one.flac")
+            audio = FLAC(root / "one.flac")
+            for kind, data in ((3, b"broken front"), (4, back_bytes)):
+                picture = Picture()
+                picture.type, picture.mime, picture.data = kind, "image/jpeg", data
+                audio.add_picture(picture)
+            audio.save()
+
+            plan = plan_cover_embedding(
+                root, extensions={".flac"}, replace_broken=True
+            )
+            result = embed_covers(plan)
+            pictures = FLAC(root / "one.flac").pictures
+
+        self.assertEqual(result.updated_files, 1)
+        self.assertEqual(
+            [(picture.type, picture.data) for picture in pictures],
+            [(3, image_bytes()), (4, back_bytes)],
+        )
+
+    def test_replacing_a_broken_mp3_cover_keeps_other_pictures(self) -> None:
+        from mutagen.id3 import APIC, ID3
+
+        back_bytes = image_bytes("PNG", color="#2f75b5")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cover.jpg").write_bytes(image_bytes())
+            make_mp3(root / "one.mp3")
+            tags = ID3(root / "one.mp3")
+            # The kept picture is named like the new one on purpose: adding
+            # the new frame must not overwrite it.
+            for kind, desc, data in ((3, "", b"nope"), (4, "Cover", back_bytes)):
+                tags.add(
+                    APIC(encoding=3, mime="image/png", type=kind, desc=desc, data=data)
+                )
+            tags.save(root / "one.mp3", v2_version=3)
+
+            plan = plan_cover_embedding(
+                root, extensions={".mp3"}, replace_broken=True
+            )
+            result = embed_covers(plan)
+            frames = ID3(root / "one.mp3").getall("APIC")
+
+        self.assertEqual(result.updated_files, 1)
+        self.assertEqual(
+            sorted((frame.type, frame.data) for frame in frames),
+            [(3, image_bytes()), (4, back_bytes)],
+        )
 
     def test_ape_cover_is_stored_as_apev2_binary(self) -> None:
         with TemporaryDirectory() as directory:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 import shutil
+import tempfile
 import threading
 from collections import defaultdict
 from collections.abc import Callable
@@ -271,6 +274,30 @@ def _available_destination(path: Path) -> Path:
         counter += 1
 
 
+def _copy_through_part_file(source: Path, target: Path) -> None:
+    """Copy into a hidden ``.part`` file and give it the final name when done.
+
+    A destination that fills up (a USB stick) or disappears mid-copy used to
+    keep a truncated or empty file under the final name, indistinguishable
+    from a complete copy.
+    """
+    descriptor, name = tempfile.mkstemp(
+        prefix=".copy-",
+        suffix=".part",
+        dir=target.parent,
+    )
+    os.close(descriptor)
+    partial = Path(name)
+    try:
+        shutil.copy2(source, partial)
+        os.replace(partial, target)
+    except BaseException:
+        # Keep the real reason ("No space left on device") for the report.
+        with contextlib.suppress(OSError):
+            partial.unlink(missing_ok=True)
+        raise
+
+
 def _target_path(
     track: Track,
     destination: Path,
@@ -325,7 +352,7 @@ def execute_copy_plan(
         target = _available_destination(target)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(track.path, target)
+            _copy_through_part_file(track.path, target)
             if is_rejected:
                 copied_rejected += 1
             else:

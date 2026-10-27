@@ -24,8 +24,13 @@ from pathlib import Path
 from PIL import Image
 
 from .fileops import backup_copy, replace_preserving_times, temporary_copy
-from .metadata import embedded_cover, id3_save_options, read_embedded_cover
-from .metadata_audit import EXTERNAL_COVER_STEMS, EXTERNAL_COVER_SUFFIXES
+from .metadata import (
+    embedded_cover,
+    front_picture,
+    id3_save_options,
+    read_embedded_cover,
+)
+from .metadata_audit import find_folder_cover
 
 try:
     import mutagen
@@ -43,8 +48,6 @@ except ImportError:  # The GUI provides a friendly dependency message.
 FRONT_COVER = 3
 COVER_DESCRIPTION = "Cover"
 APE_COVER_KEY = "Cover Art (Front)"
-# A folder may contain several art files; "cover.*" wins over "folder.*".
-COVER_STEM_ORDER = ("cover", "folder", "front", "albumart", "album art")
 IMAGE_MIME_BY_FORMAT = {
     "JPEG": "image/jpeg",
     "MPO": "image/jpeg",
@@ -69,7 +72,6 @@ BITS_BY_IMAGE_MODE = {
     "I;16": 16,
     "F": 32,
 }
-SUFFIX_ORDER = (".jpg", ".jpeg", ".png", ".webp")
 
 
 class CoverTaskStopped(RuntimeError):
@@ -171,42 +173,6 @@ PlanProgress = Callable[[int, int, str], None]
 EmbedProgress = Callable[[int, int, str], None]
 
 
-def find_folder_cover(folder: Path) -> Path | None:
-    """Return the cover image of ``folder``, preferring ``cover`` over ``folder``.
-
-    Matching is case-insensitive so ``Cover.JPG`` on a case-sensitive volume
-    is found too. Stems outside the audit's known list are ignored on purpose:
-    a random ``back.jpg`` is not necessarily the album cover.
-    """
-    try:
-        entries = [
-            entry
-            for entry in folder.iterdir()
-            if entry.is_file() and entry.suffix.casefold() in EXTERNAL_COVER_SUFFIXES
-        ]
-    except OSError:
-        return None
-    ranked: list[tuple[int, int, str, Path]] = []
-    for entry in entries:
-        stem = entry.stem.casefold()
-        if stem not in EXTERNAL_COVER_STEMS:
-            continue
-        suffix = entry.suffix.casefold()
-        suffix_rank = (
-            SUFFIX_ORDER.index(suffix) if suffix in SUFFIX_ORDER else len(SUFFIX_ORDER)
-        )
-        stem_rank = (
-            COVER_STEM_ORDER.index(stem)
-            if stem in COVER_STEM_ORDER
-            else len(COVER_STEM_ORDER)
-        )
-        ranked.append((stem_rank, suffix_rank, entry.name.casefold(), entry))
-    if not ranked:
-        return None
-    ranked.sort()
-    return ranked[0][3]
-
-
 def read_cover_image(path: Path) -> CoverImage:
     """Read and validate a cover file. Raises ``ValueError`` if it is unusable."""
     try:
@@ -298,7 +264,10 @@ def _audio_files(folder: Path, extensions: set[str]) -> list[Path]:
         (
             entry
             for entry in entries
-            if entry.is_file() and entry.suffix.casefold() in extensions
+            # Hidden "._" AppleDouble files are not audio, same as in the scan.
+            if not entry.name.startswith(".")
+            and entry.is_file()
+            and entry.suffix.casefold() in extensions
         ),
         key=lambda entry: entry.name.casefold(),
     )
@@ -421,16 +390,37 @@ def _ape_payload(cover: CoverImage) -> bytes:
     return cover.path.name.encode("utf-8") + b"\x00" + cover.data
 
 
+def _kept_pictures(pictures: list) -> list:
+    """Pictures that survive replacing the cover of a file.
+
+    Only the picture the analysis shows as the cover and other front covers
+    are replaced; a back cover, booklet scans or an artist photo stay.
+    """
+    if not pictures:
+        return []
+    replaced = front_picture(pictures)
+    return [
+        picture
+        for picture in pictures
+        if picture is not replaced and picture.type != FRONT_COVER
+    ]
+
+
 def write_cover(path: Path, cover: CoverImage) -> None:
-    """Write ``cover`` into the tags of ``path``, replacing any existing art."""
+    """Write ``cover`` as the front cover of ``path``; other pictures stay."""
     if mutagen is None:
         raise RuntimeError("Не установлена библиотека Mutagen")
     audio = mutagen.File(path)
     if audio is None:
         raise ValueError("формат файла не распознан")
     if FLAC is not None and isinstance(audio, FLAC):
+        kept = _kept_pictures(audio.pictures)
         audio.clear_pictures()
+        # The new cover goes first: players that show the first picture agree
+        # with the analysis.
         audio.add_picture(_flac_picture(cover))
+        for picture in kept:
+            audio.add_picture(picture)
         audio.save()
         return
     if MP4 is not None and isinstance(audio, MP4):
@@ -444,7 +434,9 @@ def write_cover(path: Path, cover: CoverImage) -> None:
             image_format = MP4Cover.FORMAT_JPEG
         else:
             raise ValueError("M4A поддерживает только обложки JPEG и PNG")
-        audio["covr"] = [MP4Cover(cover.data, imageformat=image_format)]
+        # covr[0] is the cover the analysis shows; further images stay.
+        others = list(audio.tags.get("covr", []))[1:]
+        audio["covr"] = [MP4Cover(cover.data, imageformat=image_format), *others]
         audio.save()
         return
     tags = getattr(audio, "tags", None)
@@ -454,13 +446,21 @@ def write_cover(path: Path, cover: CoverImage) -> None:
             add_tags()
             tags = getattr(audio, "tags", None)
     if ID3 is not None and isinstance(tags, ID3):
+        kept = _kept_pictures(tags.getall("APIC"))
         tags.delall("APIC")
+        for frame in kept:
+            tags.add(frame)
+        # Frames are keyed "APIC:<desc>": a kept picture that already uses the
+        # name must not be overwritten by the new one.
+        description = COVER_DESCRIPTION
+        while f"APIC:{description}" in tags:
+            description += " "
         tags.add(
             APIC(
                 encoding=3,
                 mime=cover.mime,
                 type=FRONT_COVER,
-                desc=COVER_DESCRIPTION,
+                desc=description,
                 data=cover.data,
             )
         )
