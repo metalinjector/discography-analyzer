@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
+from .fileops import create_partial_file
 from .models import Track
 
 EXTM3U = "#EXTM3U"
@@ -48,10 +48,7 @@ def write_playlist(tracks: Iterable[Track], destination: Path) -> Path:
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     text = build_m3u8(tracks, destination.parent)
-    descriptor, name = tempfile.mkstemp(
-        prefix=".playlist-", suffix=".part", dir=destination.parent
-    )
-    partial = Path(name)
+    descriptor, partial = create_partial_file(destination.parent, ".playlist-")
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(text)

@@ -85,8 +85,13 @@ def _control_sequences(letter: str) -> list[str]:
 
 
 def _needs_keycode_fallback(keysym: str) -> bool:
-    """True when Tk could not name the key (Russian layout on Windows: "??")."""
-    return len(keysym) != 1 or not keysym.isascii()
+    """True only when Tk could not name the key (Russian layout on Windows).
+
+    Named keys never fall back: on X11 the key code is the hardware code, and
+    F1, F3, F4 and keypad 7 (67, 69, 70, 79) equal the ASCII codes of C, E, F
+    and O, so Ctrl+F3 opened the export.
+    """
+    return keysym == "??"
 
 
 def _keycode_matches(letter: str, keycode: int) -> bool:
@@ -2737,14 +2742,9 @@ class DiscographyAnalyzerApp:
             for track in self.result.tracks
             if self._folder_parts(track.relative_folder)[:prefix_length] == parts
         ]
-        return sorted(
-            selected,
-            key=lambda track: (
-                parse_position(track.disc_number)[0] or 1,
-                parse_position(track.track_number)[0] or 0,
-                track.filename.casefold(),
-            ),
-        )
+        # Folder first, as in the tree: without it an artist folder played its
+        # albums interleaved (A1, B1, A2, B2).
+        return sorted(selected, key=self._folder_sort_key)
 
     def export_playlist(self) -> None:
         tracks = self._playlist_tracks()

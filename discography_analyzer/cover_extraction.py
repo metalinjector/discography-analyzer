@@ -12,7 +12,6 @@ import contextlib
 import hashlib
 import io
 import os
-import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from pathlib import Path
 from PIL import Image
 
 from .cover_embedding import CoverTaskStopped, _audio_files, _iter_folders
+from .fileops import create_partial_file
 from .metadata import read_embedded_cover
 from .metadata_audit import find_folder_cover
 
@@ -265,10 +265,7 @@ def write_covers(
         try:
             if target.destination.exists():
                 raise OSError("файл обложки уже существует")
-            descriptor, name = tempfile.mkstemp(
-                prefix=".cover-", suffix=".part", dir=target.folder
-            )
-            partial = Path(name)
+            descriptor, partial = create_partial_file(target.folder, ".cover-")
             with os.fdopen(descriptor, "wb") as handle:
                 handle.write(target.data)
                 handle.flush()

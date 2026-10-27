@@ -123,6 +123,18 @@ class PlaylistWriteTests(unittest.TestCase):
         self.assertEqual(destination.read_text(encoding="utf-8"), "старый список")
         self.assertEqual(list(self.folder.glob(".playlist-*.part")), [])
 
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_the_playlist_gets_ordinary_permissions(self) -> None:
+        # mkstemp creates 0600 files; a playlist is an ordinary user file.
+        destination = self.folder / "list.m3u8"
+        previous = os.umask(0o022)
+        try:
+            write_playlist([make_track("1", "Artist/Album")], destination)
+        finally:
+            os.umask(previous)
+
+        self.assertEqual(destination.stat().st_mode & 0o777, 0o644)
+
 
 class PlaylistSelectionTests(unittest.TestCase):
     def app_with(self, tracks: list[Track], focus: str, visible: list[Track]):
@@ -148,6 +160,22 @@ class PlaylistSelectionTests(unittest.TestCase):
         selected = app._playlist_tracks()
 
         self.assertEqual([track.id for track in selected], ["1", "3", "2"])
+
+    def test_a_folder_with_several_albums_keeps_each_album_together(self) -> None:
+        # The subtree was sorted by disc and number only, so an artist folder
+        # with two albums played A1, B1, A2, B2: the albums interleaved.
+        tracks = [
+            make_track("A1", "Artist/(1986) A", number="1"),
+            make_track("B1", "Artist/(1991) B", number="1"),
+            make_track("A2", "Artist/(1986) A", number="2"),
+            make_track("B2", "Artist/(1991) B", number="2"),
+        ]
+        app = self.app_with(tracks, "folder-path::Artist", visible=[])
+
+        self.assertEqual(
+            [track.id for track in app._playlist_tracks()],
+            ["A1", "A2", "B1", "B2"],
+        )
 
     def test_a_track_row_uses_the_visible_rows_in_screen_order(self) -> None:
         tracks = [
