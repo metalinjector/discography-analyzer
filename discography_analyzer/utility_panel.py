@@ -32,6 +32,9 @@ class UtilityContext:
     on_completed: Callable[[Path], None]
     # The folder row (or the folder of the track) selected in the main window.
     selected_folder: Path | None = None
+    # Where the dialog's left column shows the cover: the picture bytes, or words
+    # while it downloads («Загрузка обложки… 42 %»). Set by the dialog itself.
+    on_cover: Callable[[bytes | None, str], None] | None = None
 
 
 class UtilityPanel:
