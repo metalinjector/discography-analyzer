@@ -132,6 +132,51 @@ class HttpClient:
     def get_bytes(self, url: str, headers: Mapping[str, str] | None = None) -> bytes:
         return self._get(url, headers).body
 
+    def stream_bytes(
+        self,
+        url: str,
+        progress: Callable[[int, int], None],
+        headers: Mapping[str, str] | None = None,
+    ) -> bytes:
+        """GET ``url`` in chunks, reporting ``(done, total)`` as it goes.
+
+        ``total`` is 0 when the server sends no ``Content-Length``. A transport
+        that cannot stream (the fakes in tests, for one) falls back to one read
+        and reports a single final step.
+        """
+        open_url = getattr(self.transport, "open", None)
+        if open_url is None:
+            body = self.get_bytes(url, headers)
+            progress(len(body), len(body))
+            return body
+        host = urlsplit(url).hostname or ""
+        request_headers = {"User-Agent": USER_AGENT, **(headers or {})}
+        with self._lock:
+            self.check_stopped()
+            self._wait_turn(host)
+            try:
+                with open_url(url, request_headers, self.timeout) as reply:
+                    total = int(reply.headers.get("Content-Length") or 0)
+                    # read1() returns what has arrived instead of waiting for
+                    # the whole chunk: the percentage moves while it downloads.
+                    read = getattr(reply, "read1", reply.read)
+                    chunks: list[bytes] = []
+                    done = 0
+                    while True:
+                        chunk = read(65536)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        done += len(chunk)
+                        if done > MAX_RESPONSE_BYTES:
+                            raise HttpError(url, 200, "ответ сервиса слишком большой")
+                        progress(done, total)
+                    return b"".join(chunks)
+            except (OSError, http.client.HTTPException) as exc:
+                raise HttpError(url, 0, f"{host} не отвечает: {_reason(exc)}") from exc
+            finally:
+                self._last_request[host] = self._clock()
+
     def check_stopped(self) -> None:
         if self.stop_event is not None and self.stop_event.is_set():
             raise LookupStopped
