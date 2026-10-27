@@ -56,14 +56,6 @@ from .utilities_dialog import UtilitiesDialog, UtilityContext
 TABLE_FIELD_IDS = [item[0] for item in TABLE_COLUMNS]
 
 
-def _files_word(count: int) -> str:
-    if count % 10 == 1 and count % 100 != 11:
-        return "файл"
-    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
-        return "файла"
-    return "файлов"
-
-
 # The same physical key in the Russian (ЙЦУКЕН) layout. Tk matches shortcuts
 # by keysym, so a <Control-o> binding never fires while that layout is active
 # (the key reports "Cyrillic_shcha") nor under Caps Lock (it reports "O").
