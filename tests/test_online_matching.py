@@ -339,11 +339,15 @@ class DiscFolderTests(unittest.TestCase):
             year=2012,
             disc=2,
         )
+        # No durations on the release tracks: with them the wrong pair
+        # (50 − 10 − 30) stays under the threshold even before the fix, and
+        # the test would pass without it. Without them the position (50 − 10)
+        # ties with the title (40), and the tie went to track 1.
         source = release(
-            ReleaseTrack(1, 1, "High For This", duration=247.0),
-            ReleaseTrack(1, 2, "What You Need", duration=200.0),
-            ReleaseTrack(1, 3, "Lonely Star", duration=334.0),
-            ReleaseTrack(1, 4, "Life Of The Party", duration=280.0),
+            ReleaseTrack(1, 1, "High For This"),
+            ReleaseTrack(1, 2, "What You Need"),
+            ReleaseTrack(1, 3, "Lonely Star"),
+            ReleaseTrack(1, 4, "Life Of The Party"),
             title="Trilogy",
             artist="The Weeknd",
             year=2012,
