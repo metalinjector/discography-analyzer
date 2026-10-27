@@ -31,6 +31,7 @@ from .cover_extraction import (
     plan_cover_extraction,
     write_covers,
 )
+from .online.panel import OnlineTagsPanel
 from .parsing import files_word, folders_word
 from .utility_panel import WINDOW_TITLE, UtilityContext, UtilityPanel
 
@@ -945,6 +946,7 @@ class CoverExtractionPanel(UtilityPanel):
 UTILITY_PANELS: tuple[type[UtilityPanel], ...] = (
     CoverEmbeddingPanel,
     CoverExtractionPanel,
+    OnlineTagsPanel,
 )
 
 
