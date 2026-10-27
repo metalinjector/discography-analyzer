@@ -134,7 +134,7 @@ def _cover_details(data: bytes, mime: str) -> tuple[str, int, str, int, int, str
     return mime or "image/unknown", len(data), digest, width, height, error
 
 
-def _front_picture(pictures: list[Any]) -> Any:
+def front_picture(pictures: list[Any]) -> Any:
     """Prefer the picture marked as front cover (type 3), else the first one."""
     return next(
         (item for item in pictures if getattr(item, "type", 0) == 3),
@@ -149,7 +149,7 @@ def embedded_cover(audio: Any, path: Path) -> tuple[bytes, str] | None:
     utility all reason about exactly the same picture.
     """
     if FLAC is not None and isinstance(audio, FLAC) and audio.pictures:
-        picture = _front_picture(audio.pictures)
+        picture = front_picture(audio.pictures)
         return picture.data, picture.mime or "image/unknown"
     if MP4 is not None and isinstance(audio, MP4) and audio.tags:
         covers = audio.tags.get("covr", [])
@@ -166,7 +166,7 @@ def embedded_cover(audio: Any, path: Path) -> tuple[bytes, str] | None:
             if APIC is not None and isinstance(frame, APIC)
         ]
         if pictures:
-            picture = _front_picture(pictures)
+            picture = front_picture(pictures)
             return picture.data, picture.mime or "image/unknown"
     if path.suffix.casefold() == ".ape" and tags:
         for key in ("Cover Art (Front)", "Cover Art (Back)"):
