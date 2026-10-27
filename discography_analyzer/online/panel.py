@@ -7,6 +7,7 @@ import io
 import threading
 import tkinter as tk
 import webbrowser
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -17,12 +18,21 @@ from ..parsing import files_word
 from ..utility_panel import WINDOW_TITLE, BackgroundUtilityPanel
 from .album import iter_albums
 from .apple import STOREFRONTS
+from .covers import (
+    FAILED_TEXT,
+    CoverLoader,
+    cover_to_show,
+    progress_text,
+    release_urls,
+    wanted_covers,
+)
 from .discogs import TOKEN_HINT
 from .http import LookupStopped
 from .lookup import (
     PROVIDERS,
     SERVICE_NAMES,
     AlbumLookup,
+    Candidate,
     LookupCache,
     load_details,
     look_up,
@@ -38,8 +48,8 @@ from .tagging import AlbumPlan, FillOptions, apply_plans, missing_fields, plan_a
 NO_CHOICE = "— не записывать —"
 # Three albums in a row without an answer: the service is down or blocked.
 MAX_FAILURES_IN_ROW = 3
-# The size of the cover the panel hands to the dialog's left column.
-COVER_BOX = 240
+# A cover that has not come in 10 s is not worth waiting for.
+COVER_TIMEOUT = 10
 # The click-to-enlarge preview: big enough to judge a cover, small enough to fit.
 COVER_PREVIEW_SIZE = 600
 FIELD_CHOICES = (
@@ -92,9 +102,15 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.manual_queries: dict[Path, AlbumQuery] = {}
         self.current: str | None = None
         self.result_provider = ""
-        self.thumbnails: dict[str, ImageTk.PhotoImage | None] = {}
-        # The same bytes feed the 56 px box and the large preview: one download.
-        self.thumbnail_bytes: dict[str, bytes] = {}
+        # The covers of the variants, fetched ahead and kept for the session;
+        # the same bytes feed the dialog's cover slot and the large preview.
+        self.covers = CoverLoader(self._fetch_cover, self.post)
+        # What the cover slot shows now, so that it is not redrawn for nothing.
+        self.shown_cover: tuple[bytes | None, str] | None = None
+        # Large previews waiting for their picture, by its address.
+        self.preview_windows: dict[str, list[tk.Toplevel]] = {}
+        # The variant whose track list is loading: one list at a time.
+        self.details_loading: Candidate | None = None
 
         folder = self.context.selected_folder or self.context.root_folder
         self.root_var = tk.StringVar(value=str(folder) if folder else "")
@@ -418,7 +434,6 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         except ValueError:
             self.proxy = ProxySettings()
             self.client = make_client(self.stop_event, self.proxy)
-        self.thumbnail_client = make_client(proxy=self.proxy, timeout=10)
         self.proxy_var.set(f"Прокси: {self.proxy.describe(SERVICE_NAMES)}")
 
     def _open_proxy(self) -> None:
@@ -430,7 +445,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self._make_clients()
         # Answers that came another way (or failed) must be asked again.
         self.cache = LookupCache()
-        self.thumbnails.clear()
+        self.covers.forget_failures()
         self.warned_services.clear()
         self._save_preferences()
         if self.lookups:
@@ -617,6 +632,8 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.query_artist_var.set(lookup.query.artist)
         self.query_title_var.set(lookup.query.title)
         self._show_selected()
+        # A variant chosen here earlier may still lack its track list.
+        self._load_chosen_details()
 
     def _show_selected(self) -> None:
         lookup = self.lookups.get(self.current) if self.current else None
@@ -625,6 +642,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.candidate_var.set("")
             self.search_again_button.configure(state="disabled")
             self.page_button.configure(state="disabled")
+            self.covers.focus(())
             self._report_cover(None, "")
             return
         labels = [NO_CHOICE]
@@ -645,100 +663,62 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         choice = lookup.choice if lookup is not None else None
         page = choice.release.page_url if choice is not None else ""
         self.page_button.configure(state="normal" if page and not self.busy else "disabled")
-        self._show_thumbnail(choice.release if choice is not None else None)
+        # The covers of every variant are fetched ahead: moving through the
+        # variants shows each cover at once instead of waiting for it.
+        self.covers.focus(wanted_covers(lookup))
+        self._show_choice_cover()
 
-    def _show_thumbnail(self, release) -> None:
-        """The cover of ``release`` in the small box, full cover as a fallback.
+    # -- cover -------------------------------------------------------------------
+    def _current_choice(self) -> Candidate | None:
+        lookup = self.lookups.get(self.current) if self.current else None
+        return lookup.choice if lookup is not None else None
 
-        Apple's CDN served the 100×100 and 600×600 files by timeout in a live
-        run while the 1200×1200 one came in 0.2 s, so a failed small size falls
-        back to the cover URL the utility embeds anyway.
-        """
-        if release is None:
-            self._report_cover(None, "")
-            return
-        # The full cover first: the small mzstatic sizes timed out live while
-        # the 1200×1200 one arrived in 0.2 s, and the image is downscaled here.
-        for url, fallback in (
-            (release.cover_url, release.thumbnail_url),
-            (release.thumbnail_url, ""),
-        ):
-            if not url:
-                continue
-            if url in self.thumbnails:
-                if self.thumbnails[url] is not None:
-                    self._report_cover(self.thumbnail_bytes.get(url))
-                    return
-                return  # already requested: wait for it, do not ask twice
-            self.thumbnails[url] = None
-            self._report_cover(None, "Загрузка обложки…")
-            self._request_thumbnail(url, fallback)
-            return
-        self._report_cover(None, "")
+    def _show_choice_cover(self) -> None:
+        """The selected variant's own cover: the full one, the small one, or a word."""
+        choice = self._current_choice()
+        data, text = cover_to_show(choice.release if choice is not None else None, self.covers)
+        self._report_cover(data, text)
 
     def _report_cover(self, data: bytes | None, text: str = "") -> None:
         """The dialog's left column is the one place the cover is shown."""
+        # The list is refreshed often; the picture on show is not drawn again.
+        shown = self.shown_cover
+        if shown is not None and shown[0] is data and shown[1] == text:
+            return
+        self.shown_cover = (data, text)
         report = self.context.on_cover
         if report is not None:
             report(data, text)
 
-    def _request_thumbnail(self, url: str, fallback: str) -> None:
-        last_step = {"value": -1}
+    def _fetch_cover(self, url: str, progress: Callable[[int, int], None]) -> bytes:
+        """One download of the cover loader: a client of its own, today's proxy."""
+        return make_client(proxy=self.proxy, timeout=COVER_TIMEOUT).stream_bytes(url, progress)
 
-        def progress(done: int, total: int) -> None:
-            # One event per 20 KB or per percent, not per 64 KB chunk.
-            step = int(done * 100 / total) if total else done // 20480
-            if step == last_step["value"]:
-                return
-            last_step["value"] = step
-            self.post("cover_progress", url, done, total)
+    def _cover_arrived(self, url: str) -> None:
+        for window in self.preview_windows.pop(url, []):
+            self._fill_preview(window, self.covers.get(url))
+        choice = self._current_choice()
+        if choice is not None and url in release_urls(choice.release):
+            self._show_choice_cover()
 
-        def fetch() -> None:
-            try:
-                data = self.thumbnail_client.stream_bytes(url, progress)
-            except Exception:
-                data = b""
-            self.post("thumbnail", url, data, fallback)
-
-        threading.Thread(target=fetch, daemon=True).start()
-
-    def _thumbnail_loaded(self, url: str, data: bytes, fallback: str = "") -> None:
-        try:
-            with Image.open(io.BytesIO(data)) as image:
-                image.thumbnail((COVER_BOX, COVER_BOX))
-                photo = ImageTk.PhotoImage(image.convert("RGB"))
-        except Exception:
-            if fallback and fallback not in self.thumbnails:
-                self.thumbnails[fallback] = None
-                self._report_cover(None, "Загрузка обложки…")
-                self._request_thumbnail(fallback, "")
-            else:
-                self._report_cover(None, "Обложка не загружена")
+    def _cover_progress(self, url: str, done: int, total: int) -> None:
+        choice = self._current_choice()
+        urls = release_urls(choice.release) if choice is not None else ()
+        # The full picture's progress: the small one is there in a moment.
+        if not urls or url != urls[-1]:
             return
-        self.thumbnails[url] = photo
-        self.thumbnail_bytes[url] = data
-        lookup = self.lookups.get(self.current) if self.current else None
-        choice = lookup.choice if lookup is not None else None
-        if choice is not None and url in (
-            choice.release.thumbnail_url,
-            choice.release.cover_url,
-        ):
-            self._report_cover(data)
+        data, _text = cover_to_show(choice.release, self.covers)
+        if data is None:  # nothing to look at yet: say how far the download is
+            self._report_cover(None, progress_text(done, total))
 
     def report_cover(self) -> None:
         """Show the cover of the current album again (the dialog was switched)."""
-        lookup = self.lookups.get(self.current) if self.current else None
-        choice = lookup.choice if lookup is not None else None
-        self._show_thumbnail(choice.release if choice is not None else None)
+        self.shown_cover = None
+        self._show_choice_cover()
 
     def open_cover_preview(self) -> None:
         """The dialog's click on the cover: the selected variant, enlarged."""
-        self._open_cover_preview()
-
-    def _open_cover_preview(self) -> None:
-        """The cover of the selected variant, larger."""
-        lookup = self.lookups.get(self.current) if self.current else None
-        choice = lookup.choice if lookup is not None else None
+        choice = self._current_choice()
         if choice is None or not choice.release.cover_url:
             messagebox.showinfo(
                 WINDOW_TITLE,
@@ -756,90 +736,97 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         label = ttk.Label(window, text="Загрузка…", anchor="center")
         label.pack(padx=12, pady=12, fill="both", expand=True)
         ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 10))
-        cached = self.thumbnail_bytes.get(url)
-        if cached:
-            # The thumbnail already downloaded this cover: show it at once.
-            self._cover_preview_loaded(window, url, cached)
+        data = self.covers.get(url)
+        if data is not None or self.covers.failed(url):
+            self._fill_preview(window, data)
             return
-
-        def fetch() -> None:
-            try:
-                data = self.thumbnail_client.get_bytes(url)
-            except Exception:
-                data = b""
-            self.post("cover_preview", window, url, data)
-
-        threading.Thread(target=fetch, daemon=True).start()
-
-    def _cover_progress(self, url: str, done: int, total: int) -> None:
+        # Not here yet: it goes to the head of the queue and fills the window.
+        self.preview_windows.setdefault(url, []).append(window)
         lookup = self.lookups.get(self.current) if self.current else None
-        choice = lookup.choice if lookup is not None else None
-        if choice is None or url not in (
-            choice.release.cover_url,
-            choice.release.thumbnail_url,
-        ):
-            return
-        if total:
-            percent = min(99, int(done * 100 / total))
-            self._report_cover(None, f"Загрузка обложки…\n{percent} %")
-        else:
-            self._report_cover(None, f"Загрузка обложки…\n{done // 1024} КБ")
+        self.covers.focus(wanted_covers(lookup, first=url))
 
-    def _cover_preview_loaded(self, window, url: str, data: bytes) -> None:
+    def _fill_preview(self, window: tk.Toplevel, data: bytes | None) -> None:
         if not window.winfo_exists():
             return
+        labels = [child for child in window.winfo_children() if isinstance(child, ttk.Label)]
+        if not labels:
+            return
         try:
-            with Image.open(io.BytesIO(data)) as image:
+            with Image.open(io.BytesIO(data or b"")) as image:
                 image.thumbnail((COVER_PREVIEW_SIZE, COVER_PREVIEW_SIZE))
                 photo = ImageTk.PhotoImage(image.convert("RGB"))
                 width, height = image.size
         except Exception:
-            for child in window.winfo_children():
-                if isinstance(child, ttk.Label):
-                    child.configure(text="Обложка не загружена")
+            labels[0].configure(text=FAILED_TEXT)
             return
-        for child in window.winfo_children():
-            if isinstance(child, ttk.Label):
-                child.configure(image=photo, text="")
-                child.image = photo  # a reference: Tk does not keep it
+        labels[0].configure(image=photo, text="")
+        labels[0].image = photo  # a reference: Tk does not keep it
         window.title(f"{window.title()} — {width}×{height}")
 
+    # -- variants ----------------------------------------------------------------
     def _candidate_changed(self, _event=None) -> None:
         row = self.current
         lookup = self.lookups.get(row) if row else None
         if lookup is None or self.busy:
             return
         index = self.candidate_box.current()
-        if index <= 0:
-            lookup.chosen = None
-            self._refresh_preview(lookup)
-            self._refresh_album(row)
-            self._refresh_summary()
-            return
-        lookup.chosen = index - 1
-        candidate = lookup.candidates[lookup.chosen]
+        lookup.chosen = index - 1 if index > 0 else None
         # The cover of the variant appears at once, before its track list
         # loads: in manual mode this is how covers are compared.
         self._refresh_preview(lookup)
-        if candidate.release.detailed:
-            self._refresh_album(row)
-            self._refresh_summary()
+        self._refresh_album(row)
+        self._refresh_summary()
+        self._load_chosen_details()
+
+    def _load_chosen_details(self) -> None:
+        """Load the track list of the selected variant, one list at a time.
+
+        The list of variants stays open meanwhile: covers are compared by
+        moving through it, and a track list (Apple answers one request in 3 s)
+        must not lock it. When a load ends, the variant selected by then is
+        loaded next; the ones passed over are not loaded at all.
+        """
+        if self.details_loading is not None:
+            return
+        row = self.current
+        lookup = self.lookups.get(row) if row else None
+        candidate = lookup.choice if lookup is not None else None
+        if lookup is None or candidate is None or candidate.release.detailed:
             return
         provider = self._provider(candidate.release.provider)
+        self.details_loading = candidate
+        self.status_var.set("Загрузка трек-листа...")
 
         def run() -> None:
             try:
                 load_details(provider, candidate, lookup.album, self.cache)
             except LookupStopped:
-                self.post("stopped")
-                return
+                self.post("details_done", row, lookup, candidate, None)
             except Exception as exc:
-                self.post("details_failed", row, str(exc))
-                return
-            self.post("details", row)
+                self.post("details_done", row, lookup, candidate, str(exc) or "ошибка")
+            else:
+                self.post("details_done", row, lookup, candidate, "")
 
-        self._start("Загрузка трек-листа...")
-        self.run_in_background(run)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _details_done(
+        self, row: str, lookup: AlbumLookup, candidate: Candidate, error: str | None
+    ) -> None:
+        """A track list loaded (``error`` empty), failed, or was stopped (None)."""
+        self.details_loading = None
+        # A new search may have replaced the album, the user another variant.
+        listed = self.lookups.get(row) is lookup
+        failed_choice = bool(error) and listed and lookup.choice is candidate
+        if failed_choice:
+            lookup.chosen = None  # no track list: nothing to write
+        if listed:
+            self._refresh_album(row)
+            self._refresh_summary()
+        self._load_chosen_details()  # the variant selected while this one loaded
+        if self.details_loading is None and not self.busy and error is not None:
+            self.status_var.set("Не удалось загрузить трек-лист" if failed_choice else "Готово")
+        if failed_choice:
+            messagebox.showerror(WINDOW_TITLE, f"Причина: {error}", parent=self.frame)
 
     def search_again(self) -> None:
         row = self.current
@@ -1112,20 +1099,8 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
                 self._refresh_album(row)
             self._refresh_summary()
             self.status_var.set(lookup.error or "Готово")
-        elif kind == "details":
-            self.finish_background()
-            if event[1] in self.lookups:
-                self._refresh_album(event[1])
-            self._refresh_summary()
-            self.status_var.set("Готово")
-        elif kind == "details_failed":
-            self.finish_background()
-            lookup = self.lookups.get(event[1])
-            if lookup is not None:
-                lookup.chosen = None
-                self._refresh_album(event[1])
-            self.status_var.set("Не удалось загрузить трек-лист")
-            messagebox.showerror(WINDOW_TITLE, f"Причина: {event[2]}", parent=self.frame)
+        elif kind == "details_done":
+            self._details_done(*event[1:])
         elif kind == "stopped":
             self.finish_background()
             self._refresh_summary()
@@ -1143,12 +1118,10 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.finish_background()
             self.status_var.set("Готово" if not event[1].stopped else "Остановлено")
             self._write_finished(event[1])
-        elif kind == "thumbnail":
-            self._thumbnail_loaded(event[1], event[2], event[3] if len(event) > 3 else "")
+        elif kind in ("cover_loaded", "cover_failed"):
+            self._cover_arrived(event[1])
         elif kind == "cover_progress":
             self._cover_progress(event[1], event[2], event[3])
-        elif kind == "cover_preview":
-            self._cover_preview_loaded(event[1], event[2], event[3])
         elif kind == "service_closed":
             _kind, key, text = event
             self.warned_services.add(key)
@@ -1172,4 +1145,5 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
 
     def close(self) -> None:
         self._save_preferences()
+        self.covers.close()
         super().close()

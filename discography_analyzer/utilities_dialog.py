@@ -16,10 +16,11 @@ import threading
 import tkinter as tk
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 
 from .constants import APP_NAME
 from .cover_embedding import (
@@ -1059,6 +1060,12 @@ class UtilitiesDialog:
             self.list.focus("0")
             self._show(0)
 
+    def _panel_cover(self, key: str, data: bytes | None, text: str = "") -> None:
+        """A panel's cover reaches the slot only while that panel is open:
+        a picture arriving late must not appear under another utility."""
+        if key == self.current_key:
+            self._show_cover(data, text)
+
     def _show_cover(self, data: bytes | None, text: str = "") -> None:
         """The left column of the dialog: the cover, or words about it."""
         self.cover_bytes = data or None
@@ -1074,8 +1081,12 @@ class UtilitiesDialog:
         try:
             with Image.open(io.BytesIO(self.cover_bytes)) as image:
                 inner = COVER_BOX - 12  # the sunken rim takes 3 px a side
-                image.thumbnail((inner, inner))
-                photo = ImageTk.PhotoImage(image.convert("RGB"))
+                image.draft("RGB", (inner, inner))  # a large JPEG is read smaller
+                # The small picture shown while the full one loads fills the
+                # square too, so nothing jumps when the full one replaces it.
+                photo = ImageTk.PhotoImage(
+                    ImageOps.contain(image.convert("RGB"), (inner, inner), Image.Resampling.LANCZOS)
+                )
         except Exception:
             self.cover_photo = None
             self.cover_label.configure(image="", text="Обложка не загружена")
@@ -1110,7 +1121,8 @@ class UtilitiesDialog:
         panel = self.panels.get(key)
         if panel is None:
             panel = panel_class(
-                self.container, replace(self.context, on_cover=self._show_cover)
+                self.container,
+                replace(self.context, on_cover=partial(self._panel_cover, key)),
             )
             self.panels[key] = panel
             panel.frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
