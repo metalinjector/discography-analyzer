@@ -32,7 +32,7 @@ pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [],
-    name='Discography_Analyzer_1.12.0',
+    name='Discography_Analyzer_1.13.0',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

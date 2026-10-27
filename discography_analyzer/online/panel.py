@@ -58,6 +58,15 @@ def _clock(seconds: float | None) -> str:
     return f"{minutes}:{rest:02d}"
 
 
+def needs_search(album, fill, include_complete: bool) -> bool:
+    """Does this album go to the service?
+
+    A complete album has nothing to fill, so it is skipped — unless the user
+    asked to search filled albums too (to compare a release, look at its cover).
+    """
+    return include_complete or bool(missing_fields(album, fill))
+
+
 class OnlineTagsPanel(BackgroundUtilityPanel):
     """Find albums with empty tags online and fill only the empty fields."""
 
@@ -86,6 +95,10 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         folder = self.context.selected_folder or self.context.root_folder
         self.root_var = tk.StringVar(value=str(folder) if folder else "")
         self.include_subfolders_var = tk.BooleanVar(value=self.context.include_subfolders)
+        # Off by default: the utility fills empty fields only, and a complete
+        # album needs no search. On: a fully tagged album is searched too, so
+        # the release and the cover can be inspected without writing.
+        self.include_complete_var = tk.BooleanVar(value=False)
         self.provider_var = tk.StringVar(value=provider_class(self.preferences.provider).name)
         self.mode_var = tk.StringVar(
             value="auto" if self.preferences.auto_select else "manual"
@@ -184,6 +197,12 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             variable=self.include_subfolders_var,
             command=self._clear_results,
         ).grid(row=1, column=3, padx=(12, 0), pady=(7, 0))
+        ttk.Checkbutton(
+            source,
+            text="Искать и заполненные",
+            variable=self.include_complete_var,
+            command=self._clear_results,
+        ).grid(row=2, column=3, padx=(12, 0), pady=(7, 0), sticky="e")
 
         options = ttk.Frame(source)
         options.grid(row=2, column=0, columnspan=4, sticky="w", pady=(7, 0))
@@ -554,7 +573,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         plans = self._writable_plans()
         undecided = sum(1 for lookup in self.lookups.values() if lookup.choice is None)
         files = sum(len(plan.changes) for plan in plans)
-        details = [f"Альбомов с пустыми тегами: {len(self.lookups)}"]
+        details = [f"Альбомов в списке: {len(self.lookups)}"]
         details.append(f"к записи: {len(plans)} ({files} {files_word(files)})")
         if undecided:
             details.append(f"без выбранного варианта: {undecided}")
@@ -743,6 +762,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.result_provider = provider_type.key
         provider = provider_type(self.client, options)
         include_subfolders = self.include_subfolders_var.get()
+        include_complete = self.include_complete_var.get()
         excluded = self.context.excluded_folders
         extensions = self.context.extensions
         queries = dict(self.manual_queries)
@@ -764,7 +784,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
                     progress=lambda index, label: self.post("scan", index, label),
                 ):
                     albums += 1
-                    if not missing_fields(album, fill):
+                    if not needs_search(album, fill, include_complete):
                         complete += 1
                         continue
                     self.post("searching", album.relative_folder)
@@ -912,10 +932,15 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.finish_background()
             _kind, albums, complete = event
             self._refresh_summary()
-            if self.lookups:
+            if self.lookups and self._writable_plans():
                 self.status_var.set(
                     "Проверьте варианты и нажмите «Записать теги». "
                     f"Заполненных альбомов пропущено: {complete} из {albums}."
+                )
+            elif self.lookups:
+                self.status_var.set(
+                    "Найдено, но записывать нечего: пустых полей и обложки нет. "
+                    "Список можно использовать для сверки с сервисом."
                 )
             else:
                 self.status_var.set(

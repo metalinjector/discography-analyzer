@@ -542,3 +542,33 @@ class AutoChooseTests(unittest.TestCase):
         self.assertIsNone(lookup.choice)
         self.assertEqual(len(lookup.candidates), 1)
         self.assertTrue(lookup.candidates[0].confident)
+
+
+class CompleteAlbumTests(unittest.TestCase):
+    def test_a_filled_album_is_searched_only_when_asked_for(self) -> None:
+        from discography_analyzer.online.album import read_album
+        from discography_analyzer.online.panel import needs_search
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / "Ariana Grande" / "2015 - Christmas & Chill"
+            make_flac(
+                folder / "01 - Intro.flac",
+                title="Intro",
+                artist="Ariana Grande",
+                album="Christmas & Chill",
+                date="2015",
+                genre="Christmas Music",
+                tracknumber="1",
+                tracktotal="7",
+            )
+            album = read_album(folder, root, EXTENSIONS)
+            # Text fields only: the fixture has no album artist and no cover.
+            options = FillOptions(
+                fields=frozenset({"title", "artist", "album", "year", "genre", "track"}),
+                embed_cover=False,
+                save_cover_file=False,
+            )
+            self.assertEqual(missing_fields(album, options), [])
+            self.assertFalse(needs_search(album, options, include_complete=False))
+            self.assertTrue(needs_search(album, options, include_complete=True))
