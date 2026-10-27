@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -23,6 +24,15 @@ class TrackStatus(str, Enum):
             TrackStatus.VARIATION: "● Вариация",
             TrackStatus.CONFLICT: "● Конфликт",
         }[self]
+
+
+def _clock(seconds: int) -> str:
+    """«3:05» or «1:02:13» for a duration in whole seconds."""
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
 
 
 @dataclass(slots=True)
@@ -95,11 +105,7 @@ class Track:
     def duration_display(self) -> str:
         if self.duration_seconds is None:
             return ""
-        minutes, seconds = divmod(self.duration_seconds, 60)
-        hours, minutes = divmod(minutes, 60)
-        if hours:
-            return f"{hours}:{minutes:02d}:{seconds:02d}"
-        return f"{minutes}:{seconds:02d}"
+        return _clock(self.duration_seconds)
 
     @property
     def bitrate_display(self) -> str:
@@ -268,6 +274,145 @@ def album_completeness_text(issue: AlbumCompletenessIssue) -> str:
                 *[f"• {filename}" for filename in issue.unnumbered_files],
             ]
         )
+    return "\n".join(lines)
+
+
+LOSSLESS_FORMATS = ("FLAC", "APE")
+
+
+def _format_summary(tracks: list[Track]) -> str:
+    """«FLAC — 5 (44.1 kHz/16 bit) · MP3 — 2 (320 kbps)»: sources at a glance."""
+    by_format: dict[str, list[Track]] = defaultdict(list)
+    for track in tracks:
+        by_format[track.format].append(track)
+    parts: list[str] = []
+    for name, group in sorted(
+        by_format.items(), key=lambda item: (-len(item[1]), item[0])
+    ):
+        if name in LOSSLESS_FORMATS:
+            qualities = sorted(
+                {
+                    (track.sample_rate, track.bit_depth)
+                    for track in group
+                    if track.sample_rate and track.bit_depth
+                }
+            )
+            detail = "; ".join(
+                f"{rate / 1000:g} kHz/{depth} bit" for rate, depth in qualities
+            )
+        else:
+            # A range, so a VBR album is one entry and not one per bitrate.
+            rates = sorted(
+                {round(track.bitrate / 1000) for track in group if track.bitrate}
+            )
+            detail = ""
+            if rates:
+                detail = (
+                    f"{rates[0]} kbps"
+                    if rates[0] == rates[-1]
+                    else f"{rates[0]}–{rates[-1]} kbps"
+                )
+        parts.append(f"{name} — {len(group)}" + (f" ({detail})" if detail else ""))
+    return " · ".join(parts) or "—"
+
+
+def _first_values(values: list[str], limit: int) -> str:
+    if not values:
+        return "—"
+    text = ", ".join(values[:limit])
+    if len(values) > limit:
+        text += f" и ещё {len(values) - limit}"
+    return text
+
+
+def folder_summary_text(
+    name: str,
+    relative_folder: str,
+    tracks: list[Track],
+    completeness_issues: list[AlbumCompletenessIssue],
+    audit_issues: list[MetadataAuditIssue],
+    cover_file: str = "",
+) -> str:
+    """Info panel text for a folder row: the album, or everything below it."""
+    subfolders = len({track.relative_folder for track in tracks} - {relative_folder})
+    files_line = f"Файлов: {len(tracks)}"
+    if subfolders:
+        files_line += f" · подпапок с файлами: {subfolders}"
+    durations = [
+        track.comparison_duration
+        for track in tracks
+        if track.comparison_duration is not None
+    ]
+    duration_line = f"Длительность: {_clock(round(sum(durations)))}"
+    if len(durations) < len(tracks):
+        duration_line += f" · без длительности: {len(tracks) - len(durations)}"
+
+    album_order: dict[str, tuple[int, str]] = {}
+    for track in tracks:
+        album = track.album.strip()
+        if not album:
+            continue
+        year = track.year[:4] if track.year[:4].isdigit() else ""
+        label = f"{album} ({year})" if year else album
+        album_order.setdefault(label, (int(year or 9999), album.casefold()))
+    albums = sorted(album_order, key=album_order.__getitem__)
+    artists = sorted(
+        {(track.album_artist or track.artist).strip() for track in tracks} - {""},
+        key=str.casefold,
+    )
+
+    statuses = Counter(track.status for track in tracks)
+    readable_covers = sum(
+        bool(track.cover_hash and not track.cover_error) for track in tracks
+    )
+    broken_covers = sum(bool(track.cover_error) for track in tracks)
+    cover_line = f"Встроенная обложка: {readable_covers} из {len(tracks)}"
+    if broken_covers:
+        cover_line += f" · повреждена: {broken_covers}"
+
+    lines = [
+        "ПАПКА",
+        name,
+        f"Путь: {relative_folder}",
+        files_line,
+        duration_line,
+        f"Размер: {sum(track.size_mb for track in tracks):.2f} MB",
+        f"Форматы: {_format_summary(tracks)}",
+        f"Альбомы: {_first_values(albums, 5)}",
+        f"Исполнители: {_first_values(artists, 3)}",
+        "Статусы: "
+        f"уникальных {statuses[TrackStatus.UNIQUE]} · "
+        f"дубликатов {statuses[TrackStatus.DUPLICATE]} · "
+        f"вариаций {statuses[TrackStatus.VARIATION]} · "
+        f"конфликтов {statuses[TrackStatus.CONFLICT]}",
+        cover_line,
+    ]
+    if cover_file:
+        lines.append(f"Файл обложки в папке: {cover_file}")
+
+    lines.extend(["", "ПРОВЕРКА КОМПЛЕКТА"])
+    lines.extend(
+        f"• {issue.context}: {issue.short_text}" for issue in completeness_issues[:8]
+    )
+    if len(completeness_issues) > 8:
+        lines.append(f"… и ещё {len(completeness_issues) - 8}")
+    if not completeness_issues:
+        lines.append("Пропуски по тегам Track # не обнаружены")
+
+    severities = Counter(issue.severity for issue in audit_issues)
+    lines.extend(
+        [
+            "",
+            "АУДИТ МЕТАДАННЫХ",
+            (
+                f"Ошибок {severities[AuditSeverity.ERROR]} · "
+                f"предупреждений {severities[AuditSeverity.WARNING]} · "
+                f"рекомендаций {severities[AuditSeverity.INFO]}"
+            )
+            if audit_issues
+            else "Замечаний не обнаружено",
+        ]
+    )
     return "\n".join(lines)
 
 

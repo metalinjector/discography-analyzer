@@ -32,12 +32,14 @@ from .constants import (
 from .copy_dialog import UniqueCopyDialog
 from .exporter import export_xlsx
 from .metadata import MetadataDependencyError, read_embedded_cover
+from .metadata_audit import find_folder_cover
 from .models import (
     AlbumCompletenessIssue,
     AnalysisResult,
     Track,
     TrackStatus,
     album_completeness_text,
+    folder_summary_text,
 )
 from .numbering_dialog import NumberingFixDialog
 from .numbering_fix import NumberingPlan, plan_numbering_fix
@@ -1974,6 +1976,10 @@ class DiscographyAnalyzerApp:
         if focused in self.group_members:
             self._show_group_in_panel(focused)
             return
+        folder_parts = self._folder_parts_from_tree_id(focused)
+        if folder_parts is not None:
+            self._show_folder_in_panel(folder_parts)
+            return
         track = self._selected_track()
         if track:
             self._show_track_in_panel(track)
@@ -2039,6 +2045,48 @@ class DiscographyAnalyzerApp:
             )
         self._set_text(self.info_text, "\n".join(lines))
         self._load_cover(track, self.cover_label, 190)
+
+    def _show_folder_in_panel(self, parts: tuple[str, ...]) -> None:
+        """Summary of a folder row in the tree: its album or whole subtree."""
+        if not self.result:
+            return
+        result = self.result
+        inside = {
+            folder
+            for folder in {track.relative_folder for track in result.tracks}
+            if self._folder_parts(folder)[: len(parts)] == parts
+        }
+        tracks = [track for track in result.tracks if track.relative_folder in inside]
+        track_ids = {track.id for track in tracks}
+        cover_file = find_folder_cover(result.root.joinpath(*parts))
+        self._set_text(
+            self.info_text,
+            folder_summary_text(
+                parts[-1] if parts else (result.root.name or str(result.root)),
+                str(Path(*parts)) if parts else "(корень)",
+                tracks,
+                [
+                    issue
+                    for issue in result.completeness_issues
+                    if issue.relative_folder in inside
+                ],
+                [issue for issue in result.audit_issues if issue.track_id in track_ids],
+                cover_file.name if cover_file else "",
+            ),
+        )
+        with_cover = next(
+            (
+                track
+                for track in sorted(tracks, key=self._folder_sort_key)
+                if track.cover_hash and not track.cover_error
+            ),
+            None,
+        )
+        if with_cover is not None:
+            self._load_cover(with_cover, self.cover_label, 190)
+        else:
+            self.cover_photo = None
+            self.cover_label.configure(image="", text="Встроенной обложки\nв папке нет")
 
     def _show_group_in_panel(self, group_id: str) -> None:
         members = [

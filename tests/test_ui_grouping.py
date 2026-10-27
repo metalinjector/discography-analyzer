@@ -376,6 +376,59 @@ class UiGroupingTests(unittest.TestCase):
             app.group_labels["audit-group::t0"], "t0.flac · замечаний: 2"
         )
 
+    def test_selecting_a_folder_row_shows_its_summary(self) -> None:
+        # Selecting a folder in the default «По папкам» tree used to leave the
+        # panel on the previously selected track and its cover.
+        class FakeTree:
+            def focus(self) -> str:
+                return "folder-path::Artist/Album"
+
+            def selection(self) -> tuple[str, ...]:
+                return ("folder-path::Artist/Album",)
+
+        class FakeText:
+            def __init__(self) -> None:
+                self.text = "previous track"
+
+            def configure(self, **_values) -> None:
+                pass
+
+            def delete(self, *_args) -> None:
+                self.text = ""
+
+            def insert(self, _index, text: str) -> None:
+                self.text += text
+
+        inside = track("inside", TrackStatus.UNIQUE, related=[])
+        inside.relative_folder = str(Path("Artist", "Album"))
+        inside.cover_hash = "front"
+        outside = track("outside", TrackStatus.UNIQUE, related=[])
+        outside.relative_folder = "Other"
+        app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
+        app.tree = FakeTree()
+        app.info_text = FakeText()
+        app.result = SimpleNamespace(
+            root=Path("/music"),
+            tracks=[inside, outside],
+            completeness_issues=[],
+            audit_issues=[],
+        )
+        app.track_by_id = {item.id: item for item in (inside, outside)}
+        app.audit_issue_by_id = {}
+        app.audit_item_track_ids = {}
+        app.group_members = {}
+        app._refresh_numbering_button = lambda: None
+        loaded: list[str] = []
+        app._load_cover = lambda item, _label, _size: loaded.append(item.id)
+        app.cover_label = object()
+
+        with patch("discography_analyzer.ui.find_folder_cover", return_value=None):
+            app._selection_changed()
+
+        self.assertTrue(app.info_text.text.startswith("ПАПКА\nAlbum\n"))
+        self.assertIn("Файлов: 1", app.info_text.text.splitlines())
+        self.assertEqual(loaded, ["inside"])
+
     def test_fresh_analysis_starts_with_track_number_order(self) -> None:
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
         app.sort_column = "title"
