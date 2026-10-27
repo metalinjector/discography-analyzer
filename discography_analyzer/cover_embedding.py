@@ -30,7 +30,7 @@ from .metadata import (
     id3_save_options,
     read_embedded_cover,
 )
-from .metadata_audit import EXTERNAL_COVER_STEMS, EXTERNAL_COVER_SUFFIXES
+from .metadata_audit import find_folder_cover
 
 try:
     import mutagen
@@ -48,8 +48,6 @@ except ImportError:  # The GUI provides a friendly dependency message.
 FRONT_COVER = 3
 COVER_DESCRIPTION = "Cover"
 APE_COVER_KEY = "Cover Art (Front)"
-# A folder may contain several art files; "cover.*" wins over "folder.*".
-COVER_STEM_ORDER = ("cover", "folder", "front", "albumart", "album art")
 IMAGE_MIME_BY_FORMAT = {
     "JPEG": "image/jpeg",
     "MPO": "image/jpeg",
@@ -74,7 +72,6 @@ BITS_BY_IMAGE_MODE = {
     "I;16": 16,
     "F": 32,
 }
-SUFFIX_ORDER = (".jpg", ".jpeg", ".png", ".webp")
 
 
 class CoverTaskStopped(RuntimeError):
@@ -174,42 +171,6 @@ class CoverEmbedResult:
 
 PlanProgress = Callable[[int, int, str], None]
 EmbedProgress = Callable[[int, int, str], None]
-
-
-def find_folder_cover(folder: Path) -> Path | None:
-    """Return the cover image of ``folder``, preferring ``cover`` over ``folder``.
-
-    Matching is case-insensitive so ``Cover.JPG`` on a case-sensitive volume
-    is found too. Stems outside the audit's known list are ignored on purpose:
-    a random ``back.jpg`` is not necessarily the album cover.
-    """
-    try:
-        entries = [
-            entry
-            for entry in folder.iterdir()
-            if entry.is_file() and entry.suffix.casefold() in EXTERNAL_COVER_SUFFIXES
-        ]
-    except OSError:
-        return None
-    ranked: list[tuple[int, int, str, Path]] = []
-    for entry in entries:
-        stem = entry.stem.casefold()
-        if stem not in EXTERNAL_COVER_STEMS:
-            continue
-        suffix = entry.suffix.casefold()
-        suffix_rank = (
-            SUFFIX_ORDER.index(suffix) if suffix in SUFFIX_ORDER else len(SUFFIX_ORDER)
-        )
-        stem_rank = (
-            COVER_STEM_ORDER.index(stem)
-            if stem in COVER_STEM_ORDER
-            else len(COVER_STEM_ORDER)
-        )
-        ranked.append((stem_rank, suffix_rank, entry.name.casefold(), entry))
-    if not ranked:
-        return None
-    ranked.sort()
-    return ranked[0][3]
 
 
 def read_cover_image(path: Path) -> CoverImage:

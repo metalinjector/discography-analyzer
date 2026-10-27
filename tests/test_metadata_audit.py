@@ -260,6 +260,24 @@ class MetadataAuditTests(unittest.TestCase):
             any(issue.message.startswith("Итог Track #") for issue in issues)
         )
 
+    def test_cover_suggestion_names_the_file_the_utility_embeds(self) -> None:
+        # The audit picked the first file alphabetically (AlbumArt.jpg) while
+        # the cover utility embeds cover.jpg: the suggestion named a different
+        # picture than the one the fix would write.
+        with TemporaryDirectory() as directory:
+            folder = Path(directory) / "Album"
+            folder.mkdir()
+            (folder / "AlbumArt.jpg").write_bytes(b"jpeg")
+            (folder / "cover.jpg").write_bytes(b"jpeg")
+            item = make_track("one", folder)
+            item.cover_hash = ""
+            issues = audit_metadata([item])
+
+        suggestions = [
+            issue.suggested_value for issue in issues if issue.field == "cover"
+        ]
+        self.assertEqual(suggestions, ["Встроить файл cover.jpg"])
+
     def test_cover_tie_has_no_dominant_cover_warning(self) -> None:
         self.assertEqual(
             self._cover_mismatch_track_ids(["a", "a", "b", "b"]),
