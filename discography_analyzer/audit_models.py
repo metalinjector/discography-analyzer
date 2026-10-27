@@ -15,6 +15,9 @@ AUDIT_FIELD_LABELS = {
     "year": "Year/Date",
     "genre": "Genre",
     "cover": "Встроенная обложка",
+    "format": "Формат",
+    "bitrate": "Битрейт",
+    "quality": "Частота и разрядность",
 }
 
 
@@ -48,6 +51,7 @@ class AuditCategory(str, Enum):
     COVER = "Обложка"
     READABILITY = "Чтение файла"
     FORMATTING = "Форматирование"
+    QUALITY = "Качество звука"
 
 
 class AuditConfidence(str, Enum):

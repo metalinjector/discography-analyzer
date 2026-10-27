@@ -1,3 +1,9 @@
 """Discography Analyzer."""
 
-__version__ = "1.7.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:  # Installed package or the PyInstaller bundle.
+    __version__ = version("discography-analyzer")
+except PackageNotFoundError:  # Running from a source checkout.
+    __version__ = "1.10.0"
+

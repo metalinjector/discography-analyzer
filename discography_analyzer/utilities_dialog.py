@@ -26,6 +26,12 @@ from .cover_embedding import (
     embed_covers,
     plan_cover_embedding,
 )
+from .cover_extraction import (
+    CoverExtractionPlan,
+    CoverExtractionResult,
+    plan_cover_extraction,
+    write_covers,
+)
 from .parsing import files_word, folders_word
 
 WINDOW_TITLE = "Утилиты"
@@ -566,7 +572,414 @@ class CoverEmbeddingPanel(UtilityPanel):
             self._poll_job = None
 
 
-UTILITY_PANELS: tuple[type[UtilityPanel], ...] = (CoverEmbeddingPanel,)
+
+
+class CoverExtractionPanel(UtilityPanel):
+    """Save the cover embedded in the tags into the album folder."""
+
+    title = "Обложка из тегов в файл папки"
+    description = (
+        "Находит папки без файла обложки, где у большинства треков встроена "
+        "одна и та же картинка, и сохраняет её рядом с аудио как cover.jpg, "
+        "cover.png или cover.webp — его читают foobar2000, Kodi, Plex и "
+        "проводник. Аудиофайлы не изменяются, резервные копии не нужны. "
+        "Папки с разными обложками у треков пропускаются."
+    )
+
+    def build(self) -> None:
+        self.worker: threading.Thread | None = None
+        self.stop_event = threading.Event()
+        self.events: queue.Queue[tuple] = queue.Queue()
+        self.plan: CoverExtractionPlan | None = None
+        self.busy = False
+        self._poll_job: str | None = None
+
+        default_root = (
+            str(self.context.root_folder) if self.context.root_folder else ""
+        )
+        self.root_var = tk.StringVar(value=default_root)
+        self.include_subfolders_var = tk.BooleanVar(
+            value=self.context.include_subfolders
+        )
+        self.status_var = tk.StringVar(
+            value=(
+                "Нажмите «Проверить папки», чтобы найти обложки только в тегах"
+                if default_root
+                else "Папка коллекции не выбрана"
+            )
+        )
+        self.summary_var = tk.StringVar(value="")
+        self.progress_var = tk.DoubleVar(value=0)
+
+        source = ttk.LabelFrame(self.frame, text="Папка коллекции", padding=9)
+        source.grid(row=0, column=0, sticky="ew", pady=(0, 7))
+        source.columnconfigure(1, weight=1)
+        ttk.Label(source, text="Папка").grid(row=0, column=0, padx=(0, 8))
+        ttk.Entry(source, textvariable=self.root_var, state="readonly").grid(
+            row=0, column=1, sticky="ew"
+        )
+        ttk.Button(source, text="Выбрать...", command=self._choose_root).grid(
+            row=0, column=2, padx=(8, 0)
+        )
+        ttk.Checkbutton(
+            source,
+            text="Включать подпапки",
+            variable=self.include_subfolders_var,
+            command=self._invalidate_plan,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(7, 0))
+
+        preview = ttk.LabelFrame(
+            self.frame,
+            text="Предпросмотр: папки, куда будет записана обложка",
+            padding=9,
+        )
+        preview.grid(row=1, column=0, sticky="nsew")
+        self.frame.rowconfigure(1, weight=1)
+        preview.columnconfigure(0, weight=1)
+        preview.rowconfigure(0, weight=1)
+        columns = ("folder", "source", "size", "matching", "target")
+        self.tree = ttk.Treeview(
+            preview,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+            height=11,
+        )
+        headings = {
+            "folder": "Папка",
+            "source": "Источник обложки",
+            "size": "Размер",
+            "matching": "Обложка у файлов",
+            "target": "Будет создан",
+        }
+        widths = {
+            "folder": 230,
+            "source": 185,
+            "size": 90,
+            "matching": 120,
+            "target": 105,
+        }
+        for column in columns:
+            self.tree.heading(column, text=headings[column])
+            self.tree.column(
+                column,
+                width=widths[column],
+                minwidth=70,
+                stretch=column in {"folder", "source"},
+            )
+        scroll = ttk.Scrollbar(preview, orient="vertical", command=self.tree.yview)
+        hscroll = ttk.Scrollbar(preview, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scroll.set, xscrollcommand=hscroll.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        hscroll.grid(row=1, column=0, sticky="ew")
+        ttk.Label(preview, textvariable=self.summary_var).grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
+        )
+
+        progress_holder = ttk.Frame(self.frame)
+        progress_holder.grid(row=2, column=0, sticky="ew", pady=(7, 0))
+        progress_holder.columnconfigure(0, weight=1)
+        self.progress = ttk.Progressbar(
+            progress_holder,
+            mode="determinate",
+            maximum=100,
+            variable=self.progress_var,
+        )
+        self.progress.grid(row=0, column=0, sticky="ew")
+        ttk.Label(progress_holder, textvariable=self.status_var).grid(
+            row=1, column=0, sticky="w", pady=(3, 0)
+        )
+
+        actions = ttk.Frame(self.frame)
+        actions.grid(row=3, column=0, sticky="ew", pady=(9, 0))
+        self.preview_button = ttk.Button(
+            actions, text="Проверить папки", command=self.preview
+        )
+        self.preview_button.pack(side="left")
+        self.apply_button = ttk.Button(
+            actions,
+            text="Записать обложки",
+            command=self.apply,
+            style="Accent.TButton",
+            state="disabled",
+        )
+        self.apply_button.pack(side="left", padx=6)
+        self.stop_button = ttk.Button(
+            actions, text="Остановить", command=self.stop, state="disabled"
+        )
+        self.stop_button.pack(side="left")
+
+        self._schedule_poll()
+
+    # -- root folder -------------------------------------------------------
+    def _root(self) -> Path | None:
+        value = self.root_var.get().strip()
+        return Path(value) if value else None
+
+    def _choose_root(self) -> None:
+        current = self.root_var.get() or None
+        chosen = filedialog.askdirectory(
+            parent=self.frame,
+            title="Папка коллекции",
+            initialdir=current,
+        )
+        if not chosen:
+            return
+        self.root_var.set(chosen)
+        self._invalidate_plan()
+        self.preview()
+
+    def _invalidate_plan(self) -> None:
+        self.plan = None
+        self.tree.delete(*self.tree.get_children())
+        self.summary_var.set("")
+        self.apply_button.configure(state="disabled")
+
+    # -- preview -----------------------------------------------------------
+    def preview(self) -> None:
+        if self.busy:
+            return
+        root = self._root()
+        if root is None or not root.is_dir():
+            messagebox.showwarning(
+                WINDOW_TITLE,
+                "Выберите существующую папку коллекции",
+                parent=self.frame,
+            )
+            return
+        self._invalidate_plan()
+        self._start_busy("Проверка папок...")
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(12)
+
+        include_subfolders = self.include_subfolders_var.get()
+        excluded = self.context.excluded_folders
+        extensions = self.context.extensions
+
+        def progress(files: int, folders: int, label: str) -> None:
+            self.events.put(("plan_progress", files, folders, label))
+
+        def run() -> None:
+            try:
+                plan = plan_cover_extraction(
+                    root,
+                    extensions=extensions,
+                    include_subfolders=include_subfolders,
+                    excluded_folders=excluded,
+                    stop_event=self.stop_event,
+                    progress=progress,
+                )
+                self.events.put(("plan", plan))
+            except CoverTaskStopped:
+                self.events.put(("plan_stopped",))
+            except Exception as exc:
+                self.events.put(("plan_error", str(exc)))
+
+        self.worker = threading.Thread(target=run, daemon=True)
+        self.worker.start()
+
+    def _plan_finished(self, plan: CoverExtractionPlan) -> None:
+        self.plan = plan
+        self._stop_busy()
+        self.tree.delete(*self.tree.get_children())
+        for target in plan.targets:
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    target.relative_folder,
+                    f"{target.source.name} ({target.width}×{target.height})",
+                    f"{target.size_kb:.0f} KB",
+                    f"{target.matching} из {target.total}",
+                    target.destination.name,
+                ),
+            )
+        details = [f"Папок к записи: {plan.writable}"]
+        if plan.skipped:
+            details.append(f"пропущено папок: {len(plan.skipped)}")
+        if plan.problems:
+            details.append(f"проблемных файлов: {len(plan.problems)}")
+        self.summary_var.set("; ".join(details))
+        if plan.writable:
+            self.status_var.set(
+                f"Найдено {plan.writable} {folders_word(plan.writable)}. "
+                "Проверьте список и нажмите «Записать обложки»."
+            )
+            self.apply_button.configure(state="normal")
+        else:
+            self.status_var.set(
+                "Записывать нечего: в папках уже есть файл обложки или "
+                "нет общей встроенной картинки"
+            )
+        notes = [
+            f"• {item.relative_folder}: {item.reason}" for item in plan.skipped[:8]
+        ]
+        notes.extend(
+            f"• {item.relative_path}: {item.reason}" for item in plan.problems[:8]
+        )
+        if notes:
+            messagebox.showinfo(
+                WINDOW_TITLE,
+                "Пропущенные папки и проблемы:\n" + "\n".join(notes),
+                parent=self.frame,
+            )
+
+    # -- write -------------------------------------------------------------
+    def apply(self) -> None:
+        if self.busy or self.plan is None or not self.plan.targets:
+            return
+        root = self._root()
+        if root is None or not root.is_dir():
+            return
+        plan = self.plan
+        confirmed = messagebox.askyesno(
+            WINDOW_TITLE,
+            f"Записать обложки в {plan.writable} "
+            f"{folders_word(plan.writable)}?\n\n"
+            "Аудиофайлы не изменяются, существующие файлы обложек не "
+            "перезаписываются.",
+            parent=self.frame,
+        )
+        if not confirmed:
+            return
+        self._start_busy("Запись обложек...")
+        self.progress.stop()
+        self.progress.configure(mode="determinate")
+        self.progress_var.set(0)
+
+        def progress(current: int, total: int, label: str) -> None:
+            self.events.put(("write_progress", current, total, label))
+
+        def run() -> None:
+            try:
+                result = write_covers(
+                    plan, stop_event=self.stop_event, progress=progress
+                )
+                self.events.put(("write", result))
+            except Exception as exc:
+                self.events.put(("write_error", str(exc)))
+
+        self.worker = threading.Thread(target=run, daemon=True)
+        self.worker.start()
+
+    def _write_finished(self, result: CoverExtractionResult) -> None:
+        self._stop_busy()
+        root = self._root()
+        self.status_var.set(
+            "Готово" if not result.stopped else "Остановлено пользователем"
+        )
+        details = [
+            f"Записано обложек: {result.written} "
+            f"в {result.written} {folders_word(result.written)}.",
+        ]
+        if result.failures:
+            details.append(f"Не удалось записать: {len(result.failures)}.")
+            details.extend(
+                f"• {failure.destination.name}: {failure.reason}"
+                for failure in result.failures[:8]
+            )
+        if result.stopped:
+            details.append("Обработка была остановлена до конца списка.")
+        messagebox.showinfo(WINDOW_TITLE, "\n".join(details), parent=self.frame)
+        if result.written and root is not None:
+            self.context.on_completed(root)
+            self.preview()
+
+    # -- infrastructure ----------------------------------------------------
+    def stop(self) -> None:
+        if self.busy and self.worker and self.worker.is_alive():
+            self.stop_event.set()
+            self.stop_button.configure(state="disabled")
+            self.status_var.set("Остановка после текущей папки...")
+
+    def _start_busy(self, status: str) -> None:
+        self.busy = True
+        self.stop_event.clear()
+        self.status_var.set(status)
+        self.preview_button.configure(state="disabled")
+        self.apply_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
+
+    def _stop_busy(self) -> None:
+        self.busy = False
+        self.worker = None
+        self.progress.stop()
+        self.progress.configure(mode="determinate")
+        self.progress_var.set(0)
+        self.preview_button.configure(state="normal")
+        self.stop_button.configure(state="disabled")
+
+    def _schedule_poll(self) -> None:
+        self._poll_job = self.frame.after(100, self._poll_events)
+
+    def _poll_events(self) -> None:
+        if not self.frame.winfo_exists():
+            return
+        try:
+            while True:
+                event = self.events.get_nowait()
+                kind = event[0]
+                if kind == "plan_progress":
+                    _, files, folders, label = event
+                    self.status_var.set(
+                        f"Проверка: {folders} {folders_word(folders)}, "
+                        f"{files} {files_word(files)} — …{label[-70:]}"
+                    )
+                elif kind == "plan":
+                    self._plan_finished(event[1])
+                elif kind == "plan_stopped":
+                    self._stop_busy()
+                    self.status_var.set("Проверка остановлена")
+                elif kind == "plan_error":
+                    self._stop_busy()
+                    self.status_var.set("Не удалось проверить папки")
+                    messagebox.showerror(
+                        WINDOW_TITLE,
+                        f"Проверка не выполнена.\n\nПричина: {event[1]}",
+                        parent=self.frame,
+                    )
+                elif kind == "write_progress":
+                    _, current, total, label = event
+                    self.progress_var.set(
+                        round(current / total * 100) if total else 0
+                    )
+                    self.status_var.set(f"{current} из {total}: …{label[-70:]}")
+                elif kind == "write":
+                    self._write_finished(event[1])
+                elif kind == "write_error":
+                    self._stop_busy()
+                    self.status_var.set("Не удалось записать обложки")
+                    messagebox.showerror(
+                        WINDOW_TITLE,
+                        f"Обложки не записаны.\n\nПричина: {event[1]}",
+                        parent=self.frame,
+                    )
+        except queue.Empty:
+            pass
+        self._schedule_poll()
+
+    def can_close(self) -> bool:
+        if not self.busy:
+            return True
+        messagebox.showwarning(
+            WINDOW_TITLE,
+            "Сначала дождитесь завершения или нажмите «Остановить».",
+            parent=self.frame,
+        )
+        return False
+
+    def close(self) -> None:
+        if self._poll_job is not None:
+            with contextlib.suppress(tk.TclError):
+                self.frame.after_cancel(self._poll_job)
+            self._poll_job = None
+
+
+UTILITY_PANELS: tuple[type[UtilityPanel], ...] = (
+    CoverEmbeddingPanel,
+    CoverExtractionPanel,
+)
 
 
 class UtilitiesDialog:

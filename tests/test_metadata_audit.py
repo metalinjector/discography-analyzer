@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -293,3 +294,131 @@ class MetadataAuditTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def quality_track(
+    identifier: str,
+    folder: Path,
+    *,
+    fmt: str = "FLAC",
+    bitrate: int = 0,
+    sample_rate: int = 44100,
+    bit_depth: int = 16,
+    codec: str = "",
+) -> Track:
+    return dataclasses.replace(
+        make_track(identifier, folder, track_number=f"{identifier}/10"),
+        format=fmt,
+        bitrate=bitrate,
+        sample_rate=sample_rate,
+        bit_depth=bit_depth,
+        codec=codec,
+    )
+
+
+class QualityAuditTests(unittest.TestCase):
+    """The album was assembled from different sources: mixed formats,
+    a falling bitrate, a different resolution."""
+
+    def setUp(self) -> None:
+        self._temp = TemporaryDirectory()
+        self.folder = Path(self._temp.name) / "Album"
+        self.folder.mkdir(parents=True)
+        self.addCleanup(self._temp.cleanup)
+
+    def quality(self, tracks: list[Track]):
+        return [
+            issue
+            for issue in audit_metadata(tracks)
+            if issue.category is AuditCategory.QUALITY
+        ]
+
+    def test_foreign_format_is_a_warning_on_that_file(self) -> None:
+        tracks = [
+            quality_track("1", self.folder),
+            quality_track("2", self.folder),
+            quality_track("3", self.folder),
+            quality_track("4", self.folder),
+            quality_track("5", self.folder, fmt="MP3", bitrate=320_000, codec=""),
+        ]
+
+        issues = self.quality(tracks)
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].track_id, "5")
+        self.assertIs(issues[0].severity, AuditSeverity.WARNING)
+        self.assertEqual(issues[0].field, "format")
+        self.assertIn("Формат MP3", issues[0].message)
+        self.assertIn("FLAC", issues[0].message)
+
+    def test_a_falling_bitrate_is_a_warning(self) -> None:
+        tracks = [
+            quality_track("1", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("2", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("3", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("4", self.folder, fmt="MP3", bitrate=128_000),
+        ]
+
+        issues = self.quality(tracks)
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].track_id, "4")
+        self.assertEqual(issues[0].field, "bitrate")
+        self.assertIn("128 kbps", issues[0].message)
+        self.assertIn("320 kbps", issues[0].message)
+
+    def test_a_vbr_album_is_not_flagged(self) -> None:
+        tracks = [
+            quality_track(str(index), self.folder, fmt="MP3", bitrate=rate * 1000)
+            for index, rate in enumerate((190, 210, 235, 260), start=1)
+        ]
+
+        self.assertEqual(self.quality(tracks), [])
+
+    def test_a_different_lossless_resolution_is_a_recommendation(self) -> None:
+        tracks = [
+            quality_track("1", self.folder),
+            quality_track("2", self.folder),
+            quality_track("3", self.folder),
+            quality_track(
+                "4", self.folder, sample_rate=96000, bit_depth=24
+            ),
+        ]
+
+        issues = self.quality(tracks)
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].track_id, "4")
+        self.assertIs(issues[0].severity, AuditSeverity.INFO)
+        self.assertEqual(
+            issues[0].message,
+            "96 kHz/24 bit при 44.1 kHz/16 bit у большинства треков альбома",
+        )
+
+    def test_a_single_track_and_unknown_bitrates_stay_silent(self) -> None:
+        self.assertEqual(self.quality([quality_track("1", self.folder)]), [])
+        self.assertEqual(
+            self.quality(
+                [
+                    quality_track("1", self.folder, fmt="MP3"),
+                    quality_track("2", self.folder, fmt="MP3"),
+                ]
+            ),
+            [],
+        )
+
+    def test_a_tie_between_formats_is_a_recommendation_for_every_file(self) -> None:
+        tracks = [
+            quality_track("1", self.folder),
+            quality_track("2", self.folder),
+            quality_track("3", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("4", self.folder, fmt="MP3", bitrate=320_000),
+        ]
+
+        issues = self.quality(tracks)
+
+        self.assertEqual(len(issues), 4)
+        self.assertTrue(
+            all(issue.severity is AuditSeverity.INFO for issue in issues)
+        )
+        self.assertTrue(all(issue.fix_kind is None for issue in issues))

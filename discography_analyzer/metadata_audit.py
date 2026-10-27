@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -129,6 +130,139 @@ def find_folder_cover(folder: Path) -> Path | None:
         return None
     ranked.sort()
     return ranked[0][3]
+
+
+
+# Quality thresholds: a lossy track is an outlier when its bitrate is below
+# three quarters of the album median and at least 64 kbps under it. Both
+# numbers are starting points and can be tuned from what E: shows.
+LOSSLESS_FORMATS = {"FLAC", "APE"}
+LOSSLESS_CODECS = {"alac"}
+BITRATE_RATIO = 0.75
+BITRATE_DELTA_BPS = 64_000
+
+
+def _is_lossless(track: Track) -> bool:
+    fmt = track.format.strip().upper()
+    if fmt in LOSSLESS_FORMATS:
+        return True
+    return fmt == "M4A" and (track.codec or "").strip().casefold() in LOSSLESS_CODECS
+
+
+def _is_lossy(track: Track) -> bool:
+    fmt = track.format.strip().upper()
+    if fmt == "MP3":
+        return True
+    return fmt == "M4A" and not _is_lossless(track)
+
+
+def _resolution_text(sample_rate: int, bit_depth: int) -> str:
+    return f"{sample_rate / 1000:g} kHz/{bit_depth} bit"
+
+
+def _strict_majority(counts: Counter) -> tuple[object, int, int] | None:
+    """Most common value when it beats the runner-up, else ``None``."""
+    if len(counts) < 2:
+        return None
+    ranked = counts.most_common(2)
+    value, count = ranked[0]
+    second = ranked[1][1]
+    if count < 2 or count <= second:
+        return None
+    return value, count, second
+
+
+def _audit_quality(add, group: list[Track]) -> None:
+    """Flag albums assembled from different sources — no fixes on purpose."""
+    if len(group) < 2:
+        return
+
+    formats = Counter(
+        track.format.strip().upper() for track in group if track.format.strip()
+    )
+    if len(formats) > 1:
+        majority = _strict_majority(formats)
+        if majority is not None:
+            dominant = str(majority[0])
+            for track in group:
+                if track.format.strip().upper() != dominant:
+                    add(
+                        track,
+                        AuditSeverity.WARNING,
+                        AuditCategory.QUALITY,
+                        "format",
+                        (
+                            f"Формат {track.format.strip().upper()} отличается от "
+                            f"большинства треков альбома ({dominant})"
+                        ),
+                        current=track.format.strip().upper(),
+                    )
+        else:
+            for track in group:
+                add(
+                    track,
+                    AuditSeverity.INFO,
+                    AuditCategory.QUALITY,
+                    "format",
+                    "В альбоме нет преобладающего формата: треки из разных источников",
+                    current=track.format.strip().upper(),
+                )
+
+    by_format: dict[str, list[Track]] = defaultdict(list)
+    for track in group:
+        if _is_lossy(track) and track.bitrate and track.bitrate > 0:
+            by_format[track.format.strip().upper()].append(track)
+    for items in by_format.values():
+        if len(items) < 2:
+            continue
+        median = statistics.median(track.bitrate for track in items)
+        for track in items:
+            # Mutagen reports bits per second; the message is in kbps.
+            if (
+                track.bitrate < median * BITRATE_RATIO
+                and median - track.bitrate >= BITRATE_DELTA_BPS
+            ):
+                add(
+                    track,
+                    AuditSeverity.WARNING,
+                    AuditCategory.QUALITY,
+                    "bitrate",
+                    (
+                        f"Битрейт {round(track.bitrate / 1000)} kbps заметно ниже "
+                        f"остальных треков альбома "
+                        f"(медиана {round(median / 1000)} kbps)"
+                    ),
+                    current=f"{round(track.bitrate / 1000)} kbps",
+                )
+
+    lossless = [
+        track
+        for track in group
+        if _is_lossless(track) and track.sample_rate and track.bit_depth
+    ]
+    if len(lossless) < 2:
+        return
+    resolutions = Counter(
+        (track.sample_rate, track.bit_depth) for track in lossless
+    )
+    majority = _strict_majority(resolutions)
+    if majority is None:
+        return
+    rate, depth = majority[0]
+    for track in lossless:
+        if (track.sample_rate, track.bit_depth) == (rate, depth):
+            continue
+        add(
+            track,
+            AuditSeverity.INFO,
+            AuditCategory.QUALITY,
+            "quality",
+            (
+                f"{_resolution_text(track.sample_rate, track.bit_depth)} при "
+                f"{_resolution_text(rate, depth)} у большинства треков альбома"
+            ),
+            current=_resolution_text(track.sample_rate, track.bit_depth),
+        )
 
 
 def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
@@ -560,6 +694,8 @@ def audit_metadata(tracks: list[Track]) -> list[MetadataAuditIssue]:
                             suggested=f"Использовать обложку из {source.filename}",
                             confidence=AuditConfidence.MEDIUM,
                         )
+
+        _audit_quality(add, group)
 
     return sorted(
         issues,
