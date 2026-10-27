@@ -10,12 +10,16 @@ result, so they can run before any scan.
 from __future__ import annotations
 
 import contextlib
+import io
 import queue
 import threading
 import tkinter as tk
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+from PIL import Image, ImageTk
 
 from .constants import APP_NAME
 from .cover_embedding import (
@@ -943,6 +947,10 @@ class CoverExtractionPanel(UtilityPanel):
             self._poll_job = None
 
 
+# The cover square in the dialog's left column: as wide as the list above it.
+COVER_BOX = 240
+
+
 UTILITY_PANELS: tuple[type[UtilityPanel], ...] = (
     CoverEmbeddingPanel,
     CoverExtractionPanel,
@@ -981,6 +989,7 @@ class UtilitiesDialog:
 
         left = ttk.LabelFrame(self.window, text="Утилиты", padding=6)
         left.grid(row=1, column=0, sticky="nsw", padx=(12, 6), pady=(0, 6))
+        left.rowconfigure(1, weight=1)
         self.list = ttk.Treeview(
             left,
             show="tree",
@@ -992,6 +1001,25 @@ class UtilitiesDialog:
             self.list.insert("", "end", iid=str(index), text=panel_class.title)
         self.list.grid(row=0, column=0, sticky="ns")
         self.list.bind("<<TreeviewSelect>>", self._selection_changed)
+
+        # The empty room under the list is the cover of the album the panel is
+        # working on: «Загрузка обложки… 42 %» while it downloads, the picture
+        # after. A click asks the panel for the large view.
+        self.cover_frame = ttk.Frame(left, width=COVER_BOX, height=COVER_BOX)
+        self.cover_frame.grid(row=1, column=0, sticky="nw", pady=(10, 0))
+        self.cover_frame.grid_propagate(False)
+        self.cover_photo: ImageTk.PhotoImage | None = None
+        self.cover_label = ttk.Label(
+            self.cover_frame,
+            anchor="center",
+            justify="center",
+            wraplength=COVER_BOX - 20,
+            relief="solid",
+            borderwidth=1,
+        )
+        self.cover_label.pack(fill="both", expand=True)
+        self.cover_label.configure(cursor="hand2")
+        self.cover_label.bind("<Button-1>", lambda _event: self._open_cover())
 
         self.container = ttk.Frame(self.window)
         self.container.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(0, 6))
@@ -1022,6 +1050,29 @@ class UtilitiesDialog:
             self.list.focus("0")
             self._show(0)
 
+    def _show_cover(self, data: bytes | None, text: str = "") -> None:
+        """The left column of the dialog: the cover, or words about it."""
+        if not data:
+            self.cover_photo = None
+            self.cover_label.configure(image="", text=text)
+            return
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image.thumbnail((COVER_BOX, COVER_BOX))
+                photo = ImageTk.PhotoImage(image.convert("RGB"))
+        except Exception:
+            self.cover_photo = None
+            self.cover_label.configure(image="", text="Обложка не загружена")
+            return
+        self.cover_photo = photo
+        self.cover_label.configure(image=photo, text="")
+
+    def _open_cover(self) -> None:
+        panel = self.panels.get(self.current_key)
+        opener = getattr(panel, "open_cover_preview", None)
+        if callable(opener):
+            opener()
+
     def _resize_description(self, event) -> None:
         self.description_label.configure(wraplength=max(320, event.width - 12))
 
@@ -1042,13 +1093,21 @@ class UtilitiesDialog:
             return
         panel = self.panels.get(key)
         if panel is None:
-            panel = panel_class(self.container, self.context)
+            panel = panel_class(
+                self.container, replace(self.context, on_cover=self._show_cover)
+            )
             self.panels[key] = panel
             panel.frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
         panel.frame.tkraise()
         self.title_var.set(panel.title)
         self.description_var.set(panel.description)
         self.current_key = key
+        # The left column belongs to whichever utility is open now.
+        refresh = getattr(panel, "report_cover", None)
+        if callable(refresh):
+            refresh()
+        else:
+            self._show_cover(None, "")
 
     def close(self) -> None:
         for panel in self.panels.values():

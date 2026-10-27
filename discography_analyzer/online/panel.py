@@ -38,9 +38,8 @@ from .tagging import AlbumPlan, FillOptions, apply_plans, missing_fields, plan_a
 NO_CHOICE = "— не записывать —"
 # Three albums in a row without an answer: the service is down or blocked.
 MAX_FAILURES_IN_ROW = 3
-# The cover thumbnail under the album list: big enough to recognize an album,
-# small enough to leave the list its rows. The same bytes feed the enlarge window.
-COVER_BOX = 96
+# The size of the cover the panel hands to the dialog's left column.
+COVER_BOX = 240
 # The click-to-enlarge preview: big enough to judge a cover, small enough to fit.
 COVER_PREVIEW_SIZE = 600
 FIELD_CHOICES = (
@@ -96,7 +95,6 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.thumbnails: dict[str, ImageTk.PhotoImage | None] = {}
         # The same bytes feed the 56 px box and the large preview: one download.
         self.thumbnail_bytes: dict[str, bytes] = {}
-        self.blank_image = tk.PhotoImage(width=COVER_BOX, height=COVER_BOX)
 
         folder = self.context.selected_folder or self.context.root_folder
         self.root_var = tk.StringVar(value=str(folder) if folder else "")
@@ -127,7 +125,6 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             value="Нажмите «Найти совпадения»" if folder else "Папка коллекции не выбрана"
         )
         self.summary_var = tk.StringVar()
-        self.cover_status_var = tk.StringVar(value="")
         self.progress_var = tk.DoubleVar(value=0)
 
         # The window is 760 px high: every frame is kept short so the album
@@ -260,40 +257,13 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         )
 
     def _build_bottom(self) -> None:
-        """The cover on the left, everything that acts on the album on the right."""
+        """The album's query, its variants and the actions, under the list."""
         bottom = ttk.Frame(self.frame)
         bottom.grid(row=2, column=0, sticky="ew", pady=(6, 0))
-        bottom.columnconfigure(1, weight=1)
-        self.cover_frame = ttk.Frame(bottom, width=COVER_BOX, height=COVER_BOX)
-        self.cover_frame.grid(row=0, column=0, sticky="nw")
-        self.cover_frame.grid_propagate(False)
-        self.thumbnail_label = ttk.Label(
-            self.cover_frame,
-            image=self.blank_image,
-            anchor="center",
-            relief="solid",
-            borderwidth=1,
-        )
-        self.thumbnail_label.pack(fill="both", expand=True)
-        self.thumbnail_label.configure(cursor="hand2")
-        self.thumbnail_label.bind(
-            "<Button-1>", lambda _event: self._open_cover_preview()
-        )
-        # The one place for «Загрузка обложки» and its percentage: under the
-        # thumbnail, where nothing else is written.
-        self.cover_status = ttk.Label(
-            bottom,
-            textvariable=self.cover_status_var,
-            wraplength=COVER_BOX + 34,
-            justify="left",
-        )
-        self.cover_status.grid(row=1, column=0, sticky="nw", pady=(4, 0))
-        controls = ttk.Frame(bottom)
-        controls.grid(row=0, column=1, sticky="ew", padx=(10, 0))
-        controls.columnconfigure(0, weight=1)
-        self._build_selected(controls, row=0)
-        self._build_backup(controls, row=1)
-        self._build_actions(controls, row=2)
+        bottom.columnconfigure(0, weight=1)
+        self._build_selected(bottom, row=0)
+        self._build_backup(bottom, row=1)
+        self._build_actions(bottom, row=2)
 
     def _build_selected(self, parent: ttk.Frame, row: int) -> None:
         selected = ttk.Frame(parent)
@@ -655,7 +625,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.candidate_var.set("")
             self.search_again_button.configure(state="disabled")
             self.page_button.configure(state="disabled")
-            self.thumbnail_label.configure(image=self.blank_image)
+            self._report_cover(None, "")
             return
         labels = [NO_CHOICE]
         for candidate in lookup.candidates:
@@ -671,7 +641,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self._refresh_preview(lookup)
 
     def _refresh_preview(self, lookup: AlbumLookup | None) -> None:
-        """Cover thumbnail and «Страница релиза» follow the selected variant."""
+        """The cover and «Страница релиза» follow the selected variant."""
         choice = lookup.choice if lookup is not None else None
         page = choice.release.page_url if choice is not None else ""
         self.page_button.configure(state="normal" if page and not self.busy else "disabled")
@@ -685,7 +655,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         back to the cover URL the utility embeds anyway.
         """
         if release is None:
-            self._clear_cover()
+            self._report_cover(None, "")
             return
         # The full cover first: the small mzstatic sizes timed out live while
         # the 1200×1200 one arrived in 0.2 s, and the image is downscaled here.
@@ -697,18 +667,20 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
                 continue
             if url in self.thumbnails:
                 if self.thumbnails[url] is not None:
-                    self.thumbnail_label.configure(image=self.thumbnails[url])
+                    self._report_cover(self.thumbnail_bytes.get(url))
                     return
                 return  # already requested: wait for it, do not ask twice
             self.thumbnails[url] = None
-            self.thumbnail_label.configure(image=self.blank_image)
+            self._report_cover(None, "Загрузка обложки…")
             self._request_thumbnail(url, fallback)
             return
-        self._clear_cover()
+        self._report_cover(None, "")
 
-    def _clear_cover(self) -> None:
-        self.thumbnail_label.configure(image=self.blank_image)
-        self.cover_status_var.set("")
+    def _report_cover(self, data: bytes | None, text: str = "") -> None:
+        """The dialog's left column is the one place the cover is shown."""
+        report = self.context.on_cover
+        if report is not None:
+            report(data, text)
 
     def _request_thumbnail(self, url: str, fallback: str) -> None:
         last_step = {"value": -1}
@@ -738,10 +710,10 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         except Exception:
             if fallback and fallback not in self.thumbnails:
                 self.thumbnails[fallback] = None
-                self.cover_status_var.set("Загрузка обложки…")
+                self._report_cover(None, "Загрузка обложки…")
                 self._request_thumbnail(fallback, "")
             else:
-                self.cover_status_var.set("Обложка не загружена")
+                self._report_cover(None, "Обложка не загружена")
             return
         self.thumbnails[url] = photo
         self.thumbnail_bytes[url] = data
@@ -751,11 +723,20 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             choice.release.thumbnail_url,
             choice.release.cover_url,
         ):
-            self.thumbnail_label.configure(image=photo)
-            self.cover_status_var.set("Нажмите, чтобы увеличить")
+            self._report_cover(data)
+
+    def report_cover(self) -> None:
+        """Show the cover of the current album again (the dialog was switched)."""
+        lookup = self.lookups.get(self.current) if self.current else None
+        choice = lookup.choice if lookup is not None else None
+        self._show_thumbnail(choice.release if choice is not None else None)
+
+    def open_cover_preview(self) -> None:
+        """The dialog's click on the cover: the selected variant, enlarged."""
+        self._open_cover_preview()
 
     def _open_cover_preview(self) -> None:
-        """A click on the thumbnail: the cover of the selected variant, larger."""
+        """The cover of the selected variant, larger."""
         lookup = self.lookups.get(self.current) if self.current else None
         choice = lookup.choice if lookup is not None else None
         if choice is None or not choice.release.cover_url:
@@ -800,9 +781,9 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             return
         if total:
             percent = min(99, int(done * 100 / total))
-            self.cover_status_var.set(f"Загрузка обложки… {percent}%")
+            self._report_cover(None, f"Загрузка обложки…\n{percent} %")
         else:
-            self.cover_status_var.set(f"Загрузка обложки… {done // 1024} КБ")
+            self._report_cover(None, f"Загрузка обложки…\n{done // 1024} КБ")
 
     def _cover_preview_loaded(self, window, url: str, data: bytes) -> None:
         if not window.winfo_exists():
