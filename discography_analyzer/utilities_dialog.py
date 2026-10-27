@@ -2,8 +2,9 @@
 
 The window keeps a list of utilities on the left and builds the selected panel
 on the right, so a new utility is a new panel class plus one entry in
-``UTILITY_PANELS``. Panels work on the filesystem, not on the analysis result,
-so they can run before any scan.
+``UTILITY_PANELS``; the base classes are in :mod:`utility_panel`, so the class
+can live in its own module. Panels work on the filesystem, not on the analysis
+result, so they can run before any scan.
 """
 
 from __future__ import annotations
@@ -12,8 +13,6 @@ import contextlib
 import queue
 import threading
 import tkinter as tk
-from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -33,44 +32,11 @@ from .cover_extraction import (
     write_covers,
 )
 from .parsing import files_word, folders_word
+from .utility_panel import WINDOW_TITLE, UtilityContext, UtilityPanel
 
-WINDOW_TITLE = "Утилиты"
 COVER_FORMATS = "MP3, FLAC, M4A, APE"
 
-
-@dataclass(frozen=True, slots=True)
-class UtilityContext:
-    """Everything a utility panel needs to know about the main window."""
-
-    root_folder: Path | None
-    include_subfolders: bool
-    excluded_folders: tuple[str, ...]
-    extensions: frozenset[str]
-    backup_enabled: bool
-    on_backup_changed: Callable[[bool], None]
-    on_completed: Callable[[Path], None]
-
-
-class UtilityPanel:
-    """Base class of one utility: title, short description and its widgets."""
-
-    title = ""
-    description = ""
-
-    def __init__(self, parent: tk.Misc, context: UtilityContext) -> None:
-        self.context = context
-        self.frame = ttk.Frame(parent)
-        self.frame.columnconfigure(0, weight=1)
-        self.build()
-
-    def build(self) -> None:
-        raise NotImplementedError
-
-    def can_close(self) -> bool:
-        return True
-
-    def close(self) -> None:
-        """Release resources (background polling, worker threads)."""
+__all__ = ["UTILITY_PANELS", "UtilitiesDialog", "UtilityContext", "UtilityPanel"]
 
 
 class CoverEmbeddingPanel(UtilityPanel):

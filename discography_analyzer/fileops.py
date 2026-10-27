@@ -1,17 +1,20 @@
-"""Filesystem primitives shared by the tag writers.
+"""Filesystem primitives shared by the tag writers and the utilities.
 
-Both writers (text fixes and cover embedding) must never damage the source
-file: the new tag block is written into a temporary copy, verified, and only
-then swapped in with ``os.replace``. Backup and timestamp handling are the
-same in both cases, so they live here instead of being duplicated.
+No writer may damage the source file: the new tag block is written into a
+temporary copy, verified, and only then swapped in with ``os.replace``.
+Backup and timestamp handling are the same everywhere, and so is the walk
+over the collection folders, so they live here instead of being duplicated.
 """
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import os
 import secrets
 import shutil
 import tempfile
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 
@@ -42,6 +45,70 @@ def create_partial_file(folder: Path, prefix: str) -> tuple[int, Path]:
             return os.open(path, flags, 0o666), path
         except FileExistsError:
             continue
+
+
+def write_new_file(destination: Path, data: bytes, *, prefix: str) -> None:
+    """Create ``destination`` holding ``data``; an existing file is never replaced.
+
+    The bytes go to a hidden partial file, are read back and compared by
+    SHA-256, and only then renamed, so an interrupted write leaves nothing.
+    """
+    if destination.exists():
+        raise FileExistsError("файл уже существует")
+    descriptor, partial = create_partial_file(destination.parent, prefix)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if hashlib.sha256(partial.read_bytes()).digest() != hashlib.sha256(data).digest():
+            raise OSError("контрольная сумма записанного файла не совпала")
+        os.replace(partial, destination)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            partial.unlink(missing_ok=True)
+        raise
+
+
+def iter_folders(
+    root: Path,
+    include_subfolders: bool,
+    excluded_folders: Iterable[str],
+) -> Iterator[Path]:
+    """``root`` and, if asked, every subfolder; hidden and excluded ones are skipped."""
+    if not include_subfolders:
+        yield root
+        return
+    excluded = {
+        name.casefold() for name in excluded_folders if str(name).strip()
+    }
+    for current, directories, _names in os.walk(root):
+        directories[:] = [
+            name
+            for name in directories
+            if name.casefold() not in excluded and not name.startswith(".")
+        ]
+        directories.sort(key=str.casefold)
+        yield Path(current)
+
+
+def list_audio_files(folder: Path, extensions: set[str]) -> list[Path]:
+    """Files of ``folder`` with one of ``extensions`` (lower case), by name."""
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return []
+    return sorted(
+        (
+            entry
+            for entry in entries
+            # Hidden "._" AppleDouble files are not audio, same as in the scan.
+            if not entry.name.startswith(".")
+            and entry.is_file()
+            and entry.suffix.casefold() in extensions
+        ),
+        key=lambda entry: entry.name.casefold(),
+    )
 
 
 def temporary_copy(source: Path, *, prefix: str) -> Path:

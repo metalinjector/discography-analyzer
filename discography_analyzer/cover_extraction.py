@@ -8,10 +8,8 @@ needed here — unlike :mod:`cover_embedding`, which writes tags.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import io
-import os
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -19,8 +17,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from .cover_embedding import CoverTaskStopped, _audio_files, _iter_folders
-from .fileops import create_partial_file
+from .cover_embedding import CoverTaskStopped
+from .fileops import iter_folders, list_audio_files, write_new_file
 from .metadata import read_embedded_cover
 from .metadata_audit import find_folder_cover
 
@@ -159,11 +157,11 @@ def plan_cover_extraction(
     folders_scanned = 0
     files_scanned = 0
 
-    for folder in _iter_folders(root, include_subfolders, excluded_folders):
+    for folder in iter_folders(root, include_subfolders, excluded_folders):
         if stop_event is not None and stop_event.is_set():
             raise CoverTaskStopped
         folders_scanned += 1
-        audio_files = _audio_files(folder, wanted)
+        audio_files = list_audio_files(folder, wanted)
         if not audio_files:
             continue
         files_scanned += len(audio_files)
@@ -261,27 +259,11 @@ def write_covers(
             break
         if progress is not None:
             progress(index - 1, total, target.relative_folder)
-        partial: Path | None = None
         try:
-            if target.destination.exists():
-                raise OSError("файл обложки уже существует")
-            descriptor, partial = create_partial_file(target.folder, ".cover-")
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(target.data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            written_digest = hashlib.sha256(partial.read_bytes()).hexdigest()
-            if written_digest != hashlib.sha256(target.data).hexdigest():
-                raise OSError("контрольная сумма записанной обложки не совпала")
-            os.replace(partial, target.destination)
-            partial = None
+            write_new_file(target.destination, target.data, prefix=".cover-")
             written += 1
         except OSError as exc:
             failures.append(ExtractionFailure(target.destination, str(exc)))
-        finally:
-            if partial is not None:
-                with contextlib.suppress(OSError):
-                    partial.unlink(missing_ok=True)
         if progress is not None:
             progress(index, total, target.relative_folder)
     return CoverExtractionResult(
