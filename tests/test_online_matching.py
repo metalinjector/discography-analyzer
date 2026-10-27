@@ -98,7 +98,10 @@ class NormalizationTests(unittest.TestCase):
         self.assertFalse(
             editions_compatible(edition_of("Album (Remastered 2009)"), edition_of("Album (2011 Remaster)"))
         )
-        self.assertFalse(editions_compatible(edition_of("Song - Single"), edition_of("Song")))
+        # «- Single»/«- EP» is a release type, not another edition: Apple names
+        # the album «Christmas & Chill - EP» while the folder says
+        # «Christmas & Chill». A single is rejected by its track list instead.
+        self.assertTrue(editions_compatible(edition_of("Song - Single"), edition_of("Song")))
 
     def test_year_comes_from_any_date_shape(self) -> None:
         self.assertEqual(parse_year("1986-03-03T08:00:00Z"), 1986)
@@ -260,3 +263,63 @@ class TrackMatchingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveShapeTests(unittest.TestCase):
+    """Shapes met in real answers: «- EP» suffixes and «Artist - Title» names."""
+
+    def test_an_apple_ep_suffix_is_not_another_edition(self) -> None:
+        guess = AlbumGuess("Ariana Grande", "Christmas & Chill", 2015, 7, None)
+        ep = release(
+            *[ReleaseTrack(1, index, f"Song {index}") for index in range(1, 8)],
+            title="Christmas & Chill - EP",
+            artist="Ariana Grande",
+            year=2015,
+        )
+
+        self.assertTrue(release_fits(guess, ep))
+        self.assertEqual(edition_of(ep.title).flags, frozenset())
+
+    def test_a_file_named_artist_dash_title_matches_its_track(self) -> None:
+        # «02 - ROSÉ - 3am.m4a»: rippers often leave the artist in the name.
+        local = album(
+            [
+                track("02 - ROSÉ - 3am.m4a", seconds=200.0),
+                track("03 - ROSÉ - two years.m4a", seconds=190.0),
+            ],
+            artist="ROSÉ",
+            title="rosie",
+            year=2024,
+        )
+        source = release(
+            ReleaseTrack(1, 1, "3am", duration=200.0),
+            ReleaseTrack(1, 2, "two years", duration=190.0),
+            title="rosie",
+            artist="ROSÉ",
+            year=2024,
+        )
+
+        matches = match_tracks(local, source)
+
+        self.assertEqual([match.source.title if match.source else None for match in matches],
+                         ["3am", "two years"])
+
+    def test_a_dash_in_a_title_is_not_read_as_an_artist(self) -> None:
+        # Same position, but the duration is a minute off: only the title could
+        # rescue the pair, and «Love - Hate» must not become «Hate» here.
+        local = album(
+            [track("03 - Love - Hate.flac", seconds=200.0)],
+            artist="Someone",
+            title="Album",
+            year=2000,
+        )
+        source = release(
+            ReleaseTrack(1, 3, "Hate", duration=260.0),
+            title="Album",
+            artist="Someone",
+            year=2000,
+        )
+
+        matches = match_tracks(local, source)
+
+        self.assertIsNone(matches[0].source)

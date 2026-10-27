@@ -52,8 +52,9 @@ EDITION_FLAGS = tuple(
         ("remix", r"\bremix(?:es|ed)?\b"),
         ("bonus", r"\bbonus(?:\s+tracks?)?\b"),
         ("special", r"\bspecial\s+edition\b"),
-        ("single", r"(?:^|[\s(\[\-–—])single(?:$|[\s)\]])"),
-        ("ep", r"(?:^|[\s(\[\-–—])ep(?:$|[\s)\]])"),
+        # «- Single» and «- EP» are release types, not editions: Apple appends
+        # them to the very album the folder names without a suffix. A single
+        # is rejected by its track list and coverage, not by its name.
     )
 )
 REMASTER_YEAR_RE = re.compile(
@@ -127,9 +128,14 @@ def edition_of(title: str) -> Edition:
     """Deluxe, live, remastered 2011… — the words that make another edition.
 
     Explicit and clean versions are one recording, so they are not flags.
+    The trailing release type («- EP», «- Single») is not an edition either:
+    Apple names the same album «Christmas & Chill - EP» while the folder says
+    «Christmas & Chill», and normalize_title drops the suffix for the title
+    key — the flags must agree with that.
     """
-    flags = {flag for flag, pattern in EDITION_FLAGS if pattern.search(title or "")}
-    match = REMASTER_YEAR_RE.search(title or "")
+    cleaned = RELEASE_SUFFIX_RE.sub("", title or "")
+    flags = {flag for flag, pattern in EDITION_FLAGS if pattern.search(cleaned)}
+    match = REMASTER_YEAR_RE.search(cleaned)
     year = int(match.group(1) or match.group(2)) if match else None
     return Edition(frozenset(flags), year)
 
@@ -233,11 +239,37 @@ def local_title(track: Track) -> str:
     return "" if GENERIC_TITLE_RE.match(title) else title
 
 
+def title_keys(title: str, artist_hint: str) -> list[str]:
+    """Keys to compare with a release track: the title itself and, for the
+    «Artist - Title» file names rippers produce, the part after the dash.
+
+    The tail is used only when the head is the album artist, so «Love - Hate»
+    by someone else is not silently read as «Hate».
+    """
+    keys = [normalize_track_title(title)]
+    if " - " in title:
+        head, tail = title.split(" - ", 1)
+        head_key = normalize_name(head)
+        artist_key = normalize_name(artist_hint)
+        if (
+            head_key
+            and artist_key
+            and (head_key == artist_key or _similar(head_key, artist_key))
+        ):
+            keys.append(normalize_track_title(tail))
+    unique: list[str] = []
+    for key in keys:
+        if key and key not in unique:
+            unique.append(key)
+    return unique
+
+
 def pair_score(
     track: Track,
     disc_hint: int | None,
     candidate: ReleaseTrack,
     single_disc: bool,
+    artist_hint: str = "",
 ) -> int:
     score = 0
     disc, number = local_position(track, disc_hint)
@@ -245,12 +277,15 @@ def pair_score(
         same_disc = disc == candidate.disc if disc is not None else candidate.disc == 1
         if single_disc or same_disc:
             score += 50
-    mine = normalize_track_title(local_title(track))
+    mine_keys = title_keys(local_title(track), artist_hint)
     theirs = normalize_track_title(candidate.title)
-    if mine and theirs:
-        if mine == theirs:
+    if mine_keys and theirs:
+        if theirs in mine_keys:
             score += 40
-        elif min(len(mine), len(theirs)) >= 5 and (mine in theirs or theirs in mine):
+        elif any(
+            min(len(mine), len(theirs)) >= 5 and (mine in theirs or theirs in mine)
+            for mine in mine_keys
+        ):
             score += 25
         else:
             score -= 10
@@ -283,7 +318,13 @@ def match_tracks(album: LocalAlbum, release: Release) -> tuple[TrackMatch, ...]:
     single_disc = release.disc_total <= 1
     pairs = sorted(
         (
-            (pair_score(track, album.guess.disc, candidate, single_disc), mine, theirs)
+            (
+                pair_score(
+                    track, album.guess.disc, candidate, single_disc, album.guess.artist
+                ),
+                mine,
+                theirs,
+            )
             for mine, track in enumerate(album.tracks)
             for theirs, candidate in enumerate(release.tracks)
         ),
