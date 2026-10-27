@@ -339,7 +339,7 @@ class QualityAuditTests(unittest.TestCase):
             quality_track("2", self.folder),
             quality_track("3", self.folder),
             quality_track("4", self.folder),
-            quality_track("5", self.folder, fmt="MP3", bitrate=320, codec=""),
+            quality_track("5", self.folder, fmt="MP3", bitrate=320_000, codec=""),
         ]
 
         issues = self.quality(tracks)
@@ -353,10 +353,10 @@ class QualityAuditTests(unittest.TestCase):
 
     def test_a_falling_bitrate_is_a_warning(self) -> None:
         tracks = [
-            quality_track("1", self.folder, fmt="MP3", bitrate=320),
-            quality_track("2", self.folder, fmt="MP3", bitrate=320),
-            quality_track("3", self.folder, fmt="MP3", bitrate=320),
-            quality_track("4", self.folder, fmt="MP3", bitrate=128),
+            quality_track("1", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("2", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("3", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("4", self.folder, fmt="MP3", bitrate=128_000),
         ]
 
         issues = self.quality(tracks)
@@ -369,7 +369,7 @@ class QualityAuditTests(unittest.TestCase):
 
     def test_a_vbr_album_is_not_flagged(self) -> None:
         tracks = [
-            quality_track(str(index), self.folder, fmt="MP3", bitrate=rate)
+            quality_track(str(index), self.folder, fmt="MP3", bitrate=rate * 1000)
             for index, rate in enumerate((190, 210, 235, 260), start=1)
         ]
 
@@ -411,8 +411,8 @@ class QualityAuditTests(unittest.TestCase):
         tracks = [
             quality_track("1", self.folder),
             quality_track("2", self.folder),
-            quality_track("3", self.folder, fmt="MP3", bitrate=320),
-            quality_track("4", self.folder, fmt="MP3", bitrate=320),
+            quality_track("3", self.folder, fmt="MP3", bitrate=320_000),
+            quality_track("4", self.folder, fmt="MP3", bitrate=320_000),
         ]
 
         issues = self.quality(tracks)

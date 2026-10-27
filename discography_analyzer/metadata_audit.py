@@ -139,7 +139,7 @@ def find_folder_cover(folder: Path) -> Path | None:
 LOSSLESS_FORMATS = {"FLAC", "APE"}
 LOSSLESS_CODECS = {"alac"}
 BITRATE_RATIO = 0.75
-BITRATE_DELTA_KBPS = 64
+BITRATE_DELTA_BPS = 64_000
 
 
 def _is_lossless(track: Track) -> bool:
@@ -217,9 +217,10 @@ def _audit_quality(add, group: list[Track]) -> None:
             continue
         median = statistics.median(track.bitrate for track in items)
         for track in items:
+            # Mutagen reports bits per second; the message is in kbps.
             if (
                 track.bitrate < median * BITRATE_RATIO
-                and median - track.bitrate >= BITRATE_DELTA_KBPS
+                and median - track.bitrate >= BITRATE_DELTA_BPS
             ):
                 add(
                     track,
@@ -227,10 +228,11 @@ def _audit_quality(add, group: list[Track]) -> None:
                     AuditCategory.QUALITY,
                     "bitrate",
                     (
-                        f"Битрейт {track.bitrate} kbps заметно ниже остальных "
-                        f"треков альбома (медиана {round(median)} kbps)"
+                        f"Битрейт {round(track.bitrate / 1000)} kbps заметно ниже "
+                        f"остальных треков альбома "
+                        f"(медиана {round(median / 1000)} kbps)"
                     ),
-                    current=f"{track.bitrate} kbps",
+                    current=f"{round(track.bitrate / 1000)} kbps",
                 )
 
     lossless = [
