@@ -39,6 +39,8 @@ NO_CHOICE = "— не записывать —"
 # Three albums in a row without an answer: the service is down or blocked.
 MAX_FAILURES_IN_ROW = 3
 THUMBNAIL_SIZE = 56
+# The click-to-enlarge preview: big enough to judge a cover, small enough to fit.
+COVER_PREVIEW_SIZE = 600
 FIELD_CHOICES = (
     ("title", "Название"),
     ("artist", "Исполнитель"),
@@ -90,6 +92,8 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.current: str | None = None
         self.result_provider = ""
         self.thumbnails: dict[str, ImageTk.PhotoImage | None] = {}
+        # The same bytes feed the 56 px box and the large preview: one download.
+        self.thumbnail_bytes: dict[str, bytes] = {}
         self.blank_image = tk.PhotoImage(width=THUMBNAIL_SIZE, height=THUMBNAIL_SIZE)
 
         folder = self.context.selected_folder or self.context.root_folder
@@ -260,6 +264,10 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         selected.columnconfigure(4, weight=1)
         self.thumbnail_label = ttk.Label(selected, image=self.blank_image)
         self.thumbnail_label.grid(row=0, column=0, rowspan=2, padx=(0, 10))
+        self.thumbnail_label.configure(cursor="hand2")
+        self.thumbnail_label.bind(
+            "<Button-1>", lambda _event: self._open_cover_preview()
+        )
         ttk.Label(selected, text="Исполнитель").grid(row=0, column=1, sticky="w")
         self.artist_entry = ttk.Entry(selected, textvariable=self.query_artist_var)
         self.artist_entry.grid(row=0, column=2, sticky="ew", padx=(6, 0))
@@ -628,41 +636,128 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         )
         self.candidate_box.current(0 if lookup.chosen is None else lookup.chosen + 1)
         self.search_again_button.configure(state="disabled" if self.busy else "normal")
-        choice = lookup.choice
+        self._refresh_preview(lookup)
+
+    def _refresh_preview(self, lookup: AlbumLookup | None) -> None:
+        """Cover thumbnail and «Страница релиза» follow the selected variant."""
+        choice = lookup.choice if lookup is not None else None
         page = choice.release.page_url if choice is not None else ""
         self.page_button.configure(state="normal" if page and not self.busy else "disabled")
-        self._show_thumbnail(choice.release.thumbnail_url if choice is not None else "")
+        self._show_thumbnail(choice.release if choice is not None else None)
 
-    def _show_thumbnail(self, url: str) -> None:
-        if not url:
+    def _show_thumbnail(self, release) -> None:
+        """The cover of ``release`` in the small box, full cover as a fallback.
+
+        Apple's CDN served the 100×100 and 600×600 files by timeout in a live
+        run while the 1200×1200 one came in 0.2 s, so a failed small size falls
+        back to the cover URL the utility embeds anyway.
+        """
+        if release is None:
             self.thumbnail_label.configure(image=self.blank_image)
             return
-        if url in self.thumbnails:
-            self.thumbnail_label.configure(image=self.thumbnails[url] or self.blank_image)
+        # The full cover first: the small mzstatic sizes timed out live while
+        # the 1200×1200 one arrived in 0.2 s, and the image is downscaled here.
+        for url, fallback in (
+            (release.cover_url, release.thumbnail_url),
+            (release.thumbnail_url, ""),
+        ):
+            if not url:
+                continue
+            if url in self.thumbnails:
+                if self.thumbnails[url] is not None:
+                    self.thumbnail_label.configure(image=self.thumbnails[url])
+                    return
+                return  # already requested: wait for it, do not ask twice
+            self.thumbnails[url] = None
+            self.thumbnail_label.configure(image=self.blank_image)
+            self._request_thumbnail(url, fallback)
             return
-        self.thumbnails[url] = None  # requested; stays None if it fails
         self.thumbnail_label.configure(image=self.blank_image)
+
+    def _request_thumbnail(self, url: str, fallback: str) -> None:
+        def fetch() -> None:
+            try:
+                data = self.thumbnail_client.get_bytes(url)
+            except Exception:
+                data = b""
+            self.post("thumbnail", url, data, fallback)
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _thumbnail_loaded(self, url: str, data: bytes, fallback: str = "") -> None:
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+                photo = ImageTk.PhotoImage(image.convert("RGB"))
+        except Exception:
+            if fallback and fallback not in self.thumbnails:
+                self.thumbnails[fallback] = None
+                self._request_thumbnail(fallback, "")
+            return
+        self.thumbnails[url] = photo
+        self.thumbnail_bytes[url] = data
+        lookup = self.lookups.get(self.current) if self.current else None
+        choice = lookup.choice if lookup is not None else None
+        if choice is not None and url in (
+            choice.release.thumbnail_url,
+            choice.release.cover_url,
+        ):
+            self.thumbnail_label.configure(image=photo)
+
+    def _open_cover_preview(self) -> None:
+        """A click on the thumbnail: the cover of the selected variant, larger."""
+        lookup = self.lookups.get(self.current) if self.current else None
+        choice = lookup.choice if lookup is not None else None
+        if choice is None or not choice.release.cover_url:
+            messagebox.showinfo(
+                WINDOW_TITLE,
+                "Сначала выберите вариант с обложкой",
+                parent=self.frame,
+            )
+            return
+        url = choice.release.cover_url
+        window = tk.Toplevel(self.frame)
+        window.title(f"Обложка — {choice.release.label()}")
+        window.transient(self.frame.winfo_toplevel())
+        window.resizable(False, False)
+        # 600 px cover + 12 px padding + the button: a shorter window cut it off.
+        window.geometry("640x700")
+        label = ttk.Label(window, text="Загрузка…", anchor="center")
+        label.pack(padx=12, pady=12, fill="both", expand=True)
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 10))
+        cached = self.thumbnail_bytes.get(url)
+        if cached:
+            # The thumbnail already downloaded this cover: show it at once.
+            self._cover_preview_loaded(window, url, cached)
+            return
 
         def fetch() -> None:
             try:
                 data = self.thumbnail_client.get_bytes(url)
             except Exception:
                 data = b""
-            self.post("thumbnail", url, data)
+            self.post("cover_preview", window, url, data)
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    def _thumbnail_loaded(self, url: str, data: bytes) -> None:
+    def _cover_preview_loaded(self, window, url: str, data: bytes) -> None:
+        if not window.winfo_exists():
+            return
         try:
             with Image.open(io.BytesIO(data)) as image:
-                image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
-                self.thumbnails[url] = ImageTk.PhotoImage(image.convert("RGB"))
+                image.thumbnail((COVER_PREVIEW_SIZE, COVER_PREVIEW_SIZE))
+                photo = ImageTk.PhotoImage(image.convert("RGB"))
+                width, height = image.size
         except Exception:
+            for child in window.winfo_children():
+                if isinstance(child, ttk.Label):
+                    child.configure(text="Обложка не загружена")
             return
-        lookup = self.lookups.get(self.current) if self.current else None
-        choice = lookup.choice if lookup is not None else None
-        if choice is not None and choice.release.thumbnail_url == url:
-            self.thumbnail_label.configure(image=self.thumbnails[url])
+        for child in window.winfo_children():
+            if isinstance(child, ttk.Label):
+                child.configure(image=photo, text="")
+                child.image = photo  # a reference: Tk does not keep it
+        window.title(f"{window.title()} — {width}×{height}")
 
     def _candidate_changed(self, _event=None) -> None:
         row = self.current
@@ -672,11 +767,15 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         index = self.candidate_box.current()
         if index <= 0:
             lookup.chosen = None
+            self._refresh_preview(lookup)
             self._refresh_album(row)
             self._refresh_summary()
             return
         lookup.chosen = index - 1
         candidate = lookup.candidates[lookup.chosen]
+        # The cover of the variant appears at once, before its track list
+        # loads: in manual mode this is how covers are compared.
+        self._refresh_preview(lookup)
         if candidate.release.detailed:
             self._refresh_album(row)
             self._refresh_summary()
@@ -1000,7 +1099,9 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.status_var.set("Готово" if not event[1].stopped else "Остановлено")
             self._write_finished(event[1])
         elif kind == "thumbnail":
-            self._thumbnail_loaded(event[1], event[2])
+            self._thumbnail_loaded(event[1], event[2], event[3] if len(event) > 3 else "")
+        elif kind == "cover_preview":
+            self._cover_preview_loaded(event[1], event[2], event[3])
         elif kind == "service_closed":
             _kind, key, text = event
             self.warned_services.add(key)
