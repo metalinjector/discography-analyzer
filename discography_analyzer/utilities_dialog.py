@@ -990,8 +990,10 @@ class UtilitiesDialog:
         left = ttk.LabelFrame(self.window, text="Утилиты", padding=6)
         left.grid(row=1, column=0, sticky="nsw", padx=(12, 6), pady=(0, 6))
         # The white list takes every pixel above the cover: the cover slot is a
-        # fixed square and nothing moves when the window is resized.
-        left.rowconfigure(0, weight=1)
+        # fixed square and nothing moves when the window is resized. Packing, not
+        # grid: a Treeview with its row count keeps its height in a grid cell and
+        # left a strip of window under the cover.
+
         self.list = ttk.Treeview(
             left,
             show="tree",
@@ -1001,7 +1003,6 @@ class UtilitiesDialog:
         self.list.column("#0", width=240, stretch=False)
         for index, panel_class in enumerate(UTILITY_PANELS):
             self.list.insert("", "end", iid=str(index), text=panel_class.title)
-        self.list.grid(row=0, column=0, sticky="ns")
         self.list.bind("<<TreeviewSelect>>", self._selection_changed)
 
         # The empty room under the list is the cover of the album the panel is
@@ -1009,8 +1010,9 @@ class UtilitiesDialog:
         # after. The slot is always a square (the window can be small, the fonts
         # can be scaled) with a sunken rim, like a frame the picture is put into.
         self.cover_frame = ttk.Frame(left, width=COVER_BOX, height=COVER_BOX)
-        self.cover_frame.grid(row=1, column=0, sticky="sw", pady=(10, 0))
-        self.cover_frame.grid_propagate(False)
+        self.cover_frame.pack_propagate(False)
+        self.cover_frame.pack(side="bottom", anchor="w", pady=(10, 0))
+        self.list.pack(side="top", fill="both", expand=True)
 
         background = ttk.Style(self.window).lookup("TFrame", "background") or "#f0f0f0"
         self.cover_photo: ImageTk.PhotoImage | None = None
