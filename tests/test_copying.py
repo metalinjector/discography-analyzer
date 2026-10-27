@@ -1,6 +1,9 @@
+import errno
+import shutil
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from discography_analyzer.copying import (
     NOT_COPIED_FOLDER,
@@ -309,6 +312,47 @@ class CopyingTests(unittest.TestCase):
                     / "Artist/Album B/rejected.flac"
                 ).is_file()
             )
+
+    def test_failed_copy_leaves_no_file_under_the_final_name(self) -> None:
+        # A full USB stick used to keep a truncated or empty file with a normal
+        # name next to the good copies, indistinguishable from a complete one.
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "source"
+            destination = Path(directory) / "destination"
+            first = make_track("first", TrackStatus.UNIQUE, root=root)
+            second = make_track(
+                "second",
+                TrackStatus.UNIQUE,
+                root=root,
+                title="Second",
+            )
+            first.path.parent.mkdir(parents=True)
+            first.path.write_bytes(b"f" * 1000)
+            second.path.write_bytes(b"s" * 1000)
+            real_copy2 = shutil.copy2
+
+            def disk_fills_up(source, target, *args, **kwargs):
+                if Path(source) == second.path:
+                    Path(target).write_bytes(b"s" * 100)
+                    raise OSError(errno.ENOSPC, "No space left on device")
+                return real_copy2(source, target, *args, **kwargs)
+
+            with patch(
+                "discography_analyzer.copying.shutil.copy2",
+                side_effect=disk_fills_up,
+            ):
+                result = execute_copy_plan(
+                    build_copy_plan([first, second]),
+                    destination,
+                    CopyMode.FLAT,
+                )
+
+            sizes = [path.stat().st_size for path in destination.iterdir()]
+            self.assertEqual(result.copied_selected, 1)
+            self.assertEqual(len(result.failures), 1)
+            self.assertIn("No space left on device", result.failures[0].reason)
+            # Only the complete copy is left; no partial file, no temporary.
+            self.assertEqual(sizes, [1000])
 
 
 if __name__ == "__main__":
