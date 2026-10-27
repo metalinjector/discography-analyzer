@@ -128,3 +128,65 @@ class HttpClientTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamingTests(unittest.TestCase):
+    """The cover download reports how much is left, so the panel shows a percent."""
+
+    def test_bytes_arrive_in_chunks_and_every_step_is_reported(self) -> None:
+        class Reply:
+            headers = {"Content-Length": "10"}
+
+            def __init__(self) -> None:
+                self.parts = [b"aaaa", b"bbb", b"ccc"]
+
+            def read(self, size: int) -> bytes:
+                return self.parts.pop(0) if self.parts else b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> None:
+                return None
+
+        class Transport:
+            def open(self, url, headers, timeout):
+                return Reply()
+
+        client = HttpClient(transport=Transport())
+        steps: list[tuple[int, int]] = []
+        body = client.stream_bytes("https://is1-ssl.mzstatic.com/x.jpg", lambda done, total: steps.append((done, total)))
+        self.assertEqual(body, b"aaaabbbccc")
+        self.assertEqual(steps, [(4, 10), (7, 10), (10, 10)])
+
+    def test_a_transport_without_streaming_is_read_at_once(self) -> None:
+        client, _calls, _clock = client_with([Response(200, b"12345", {})])
+        steps: list[tuple[int, int]] = []
+        body = client.stream_bytes("https://example.org/x.jpg", lambda done, total: steps.append((done, total)))
+        self.assertEqual(body, b"12345")
+        self.assertEqual(steps, [(5, 5)])
+
+    def test_the_client_names_itself_when_streaming(self) -> None:
+        seen: dict = {}
+
+        class Reply:
+            headers = {"Content-Length": "0"}
+
+            def read(self, size: int) -> bytes:
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> None:
+                return None
+
+        class Transport:
+            def open(self, url, headers, timeout):
+                seen.update(headers)
+                return Reply()
+
+        HttpClient(transport=Transport()).stream_bytes(
+            "https://example.org/x.jpg", lambda done, total: None
+        )
+        self.assertEqual(seen["User-Agent"], USER_AGENT)

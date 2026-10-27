@@ -38,7 +38,9 @@ from .tagging import AlbumPlan, FillOptions, apply_plans, missing_fields, plan_a
 NO_CHOICE = "— не записывать —"
 # Three albums in a row without an answer: the service is down or blocked.
 MAX_FAILURES_IN_ROW = 3
-THUMBNAIL_SIZE = 56
+# The cover thumbnail under the album list: big enough to recognize an album,
+# small enough to leave the list its rows. The same bytes feed the enlarge window.
+COVER_BOX = 96
 # The click-to-enlarge preview: big enough to judge a cover, small enough to fit.
 COVER_PREVIEW_SIZE = 600
 FIELD_CHOICES = (
@@ -94,7 +96,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.thumbnails: dict[str, ImageTk.PhotoImage | None] = {}
         # The same bytes feed the 56 px box and the large preview: one download.
         self.thumbnail_bytes: dict[str, bytes] = {}
-        self.blank_image = tk.PhotoImage(width=THUMBNAIL_SIZE, height=THUMBNAIL_SIZE)
+        self.blank_image = tk.PhotoImage(width=COVER_BOX, height=COVER_BOX)
 
         folder = self.context.selected_folder or self.context.root_folder
         self.root_var = tk.StringVar(value=str(folder) if folder else "")
@@ -125,14 +127,14 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             value="Нажмите «Найти совпадения»" if folder else "Папка коллекции не выбрана"
         )
         self.summary_var = tk.StringVar()
+        self.cover_status_var = tk.StringVar(value="")
         self.progress_var = tk.DoubleVar(value=0)
 
         # The window is 760 px high: every frame is kept short so the album
         # list, the only part that grows, keeps several rows.
         self._build_source()
         self._build_results()
-        self._build_backup()
-        self._build_actions()
+        self._build_bottom()
         self._show_provider_options()
 
     # -- layout ----------------------------------------------------------------
@@ -257,17 +259,47 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             row=2, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
 
-        # The album selected above: its query, the release variants, the cover.
-        selected = ttk.Frame(results)
-        selected.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        selected.columnconfigure(2, weight=1)
-        selected.columnconfigure(4, weight=1)
-        self.thumbnail_label = ttk.Label(selected, image=self.blank_image)
-        self.thumbnail_label.grid(row=0, column=0, rowspan=2, padx=(0, 10))
+    def _build_bottom(self) -> None:
+        """The cover on the left, everything that acts on the album on the right."""
+        bottom = ttk.Frame(self.frame)
+        bottom.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        bottom.columnconfigure(1, weight=1)
+        self.cover_frame = ttk.Frame(bottom, width=COVER_BOX, height=COVER_BOX)
+        self.cover_frame.grid(row=0, column=0, sticky="nw")
+        self.cover_frame.grid_propagate(False)
+        self.thumbnail_label = ttk.Label(
+            self.cover_frame,
+            image=self.blank_image,
+            anchor="center",
+            relief="solid",
+            borderwidth=1,
+        )
+        self.thumbnail_label.pack(fill="both", expand=True)
         self.thumbnail_label.configure(cursor="hand2")
         self.thumbnail_label.bind(
             "<Button-1>", lambda _event: self._open_cover_preview()
         )
+        # The one place for «Загрузка обложки» and its percentage: under the
+        # thumbnail, where nothing else is written.
+        self.cover_status = ttk.Label(
+            bottom,
+            textvariable=self.cover_status_var,
+            wraplength=COVER_BOX + 34,
+            justify="left",
+        )
+        self.cover_status.grid(row=1, column=0, sticky="nw", pady=(4, 0))
+        controls = ttk.Frame(bottom)
+        controls.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        controls.columnconfigure(0, weight=1)
+        self._build_selected(controls, row=0)
+        self._build_backup(controls, row=1)
+        self._build_actions(controls, row=2)
+
+    def _build_selected(self, parent: ttk.Frame, row: int) -> None:
+        selected = ttk.Frame(parent)
+        selected.grid(row=row, column=0, sticky="ew")
+        selected.columnconfigure(2, weight=1)
+        selected.columnconfigure(4, weight=1)
         ttk.Label(selected, text="Исполнитель").grid(row=0, column=1, sticky="w")
         self.artist_entry = ttk.Entry(selected, textvariable=self.query_artist_var)
         self.artist_entry.grid(row=0, column=2, sticky="ew", padx=(6, 0))
@@ -291,9 +323,9 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         )
         self.page_button.grid(row=1, column=5, padx=(8, 0), pady=(6, 0), sticky="ew")
 
-    def _build_backup(self) -> None:
-        backup = ttk.Frame(self.frame)
-        backup.grid(row=2, column=0, sticky="ew", pady=4)
+    def _build_backup(self, parent: ttk.Frame, row: int) -> None:
+        backup = ttk.Frame(parent)
+        backup.grid(row=row, column=0, sticky="ew", pady=4)
         backup.columnconfigure(1, weight=1)
         ttk.Checkbutton(
             backup,
@@ -307,9 +339,9 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         self.backup_button.grid(row=0, column=2, padx=(8, 0))
         self._backup_state_changed(remember=False)
 
-    def _build_actions(self) -> None:
-        holder = ttk.Frame(self.frame)
-        holder.grid(row=3, column=0, sticky="ew")
+    def _build_actions(self, parent: ttk.Frame, row: int) -> None:
+        holder = ttk.Frame(parent)
+        holder.grid(row=row, column=0, sticky="ew")
         holder.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(
             holder, mode="determinate", maximum=100, variable=self.progress_var
@@ -318,8 +350,8 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         ttk.Label(holder, textvariable=self.status_var).grid(
             row=1, column=0, sticky="w", pady=(3, 0)
         )
-        actions = ttk.Frame(self.frame)
-        actions.grid(row=4, column=0, sticky="ew", pady=(9, 0))
+        actions = ttk.Frame(parent)
+        actions.grid(row=row + 1, column=0, sticky="ew", pady=(9, 0))
         self.search_button = ttk.Button(
             actions, text="Найти совпадения", command=self.search
         )
@@ -653,7 +685,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         back to the cover URL the utility embeds anyway.
         """
         if release is None:
-            self.thumbnail_label.configure(image=self.blank_image)
+            self._clear_cover()
             return
         # The full cover first: the small mzstatic sizes timed out live while
         # the 1200×1200 one arrived in 0.2 s, and the image is downscaled here.
@@ -672,12 +704,26 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.thumbnail_label.configure(image=self.blank_image)
             self._request_thumbnail(url, fallback)
             return
+        self._clear_cover()
+
+    def _clear_cover(self) -> None:
         self.thumbnail_label.configure(image=self.blank_image)
+        self.cover_status_var.set("")
 
     def _request_thumbnail(self, url: str, fallback: str) -> None:
+        last_step = {"value": -1}
+
+        def progress(done: int, total: int) -> None:
+            # One event per 20 KB or per percent, not per 64 KB chunk.
+            step = int(done * 100 / total) if total else done // 20480
+            if step == last_step["value"]:
+                return
+            last_step["value"] = step
+            self.post("cover_progress", url, done, total)
+
         def fetch() -> None:
             try:
-                data = self.thumbnail_client.get_bytes(url)
+                data = self.thumbnail_client.stream_bytes(url, progress)
             except Exception:
                 data = b""
             self.post("thumbnail", url, data, fallback)
@@ -687,12 +733,15 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
     def _thumbnail_loaded(self, url: str, data: bytes, fallback: str = "") -> None:
         try:
             with Image.open(io.BytesIO(data)) as image:
-                image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+                image.thumbnail((COVER_BOX, COVER_BOX))
                 photo = ImageTk.PhotoImage(image.convert("RGB"))
         except Exception:
             if fallback and fallback not in self.thumbnails:
                 self.thumbnails[fallback] = None
+                self.cover_status_var.set("Загрузка обложки…")
                 self._request_thumbnail(fallback, "")
+            else:
+                self.cover_status_var.set("Обложка не загружена")
             return
         self.thumbnails[url] = photo
         self.thumbnail_bytes[url] = data
@@ -703,6 +752,7 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             choice.release.cover_url,
         ):
             self.thumbnail_label.configure(image=photo)
+            self.cover_status_var.set("Нажмите, чтобы увеличить")
 
     def _open_cover_preview(self) -> None:
         """A click on the thumbnail: the cover of the selected variant, larger."""
@@ -739,6 +789,20 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self.post("cover_preview", window, url, data)
 
         threading.Thread(target=fetch, daemon=True).start()
+
+    def _cover_progress(self, url: str, done: int, total: int) -> None:
+        lookup = self.lookups.get(self.current) if self.current else None
+        choice = lookup.choice if lookup is not None else None
+        if choice is None or url not in (
+            choice.release.cover_url,
+            choice.release.thumbnail_url,
+        ):
+            return
+        if total:
+            percent = min(99, int(done * 100 / total))
+            self.cover_status_var.set(f"Загрузка обложки… {percent}%")
+        else:
+            self.cover_status_var.set(f"Загрузка обложки… {done // 1024} КБ")
 
     def _cover_preview_loaded(self, window, url: str, data: bytes) -> None:
         if not window.winfo_exists():
@@ -1100,6 +1164,8 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self._write_finished(event[1])
         elif kind == "thumbnail":
             self._thumbnail_loaded(event[1], event[2], event[3] if len(event) > 3 else "")
+        elif kind == "cover_progress":
+            self._cover_progress(event[1], event[2], event[3])
         elif kind == "cover_preview":
             self._cover_preview_loaded(event[1], event[2], event[3])
         elif kind == "service_closed":

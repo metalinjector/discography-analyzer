@@ -258,6 +258,16 @@ class ProxyTransport:
             "",
         )
 
+    def open(self, url: str, headers: Mapping[str, str], timeout: float):
+        """Open ``url`` the way the settings ask, without reading the body.
+
+        For callers that read in chunks to show how much is left: an image
+        download with a percentage under the thumbnail.
+        """
+        opener = self._openers[self.route(url)]
+        request = urllib.request.Request(url, headers=dict(headers))
+        return opener.open(request, timeout=timeout)
+
     def route(self, url: str) -> str:
         """«system», «direct» or «own» for this request."""
         if self.settings.mode == "direct":
