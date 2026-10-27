@@ -989,7 +989,9 @@ class UtilitiesDialog:
 
         left = ttk.LabelFrame(self.window, text="Утилиты", padding=6)
         left.grid(row=1, column=0, sticky="nsw", padx=(12, 6), pady=(0, 6))
-        left.rowconfigure(1, weight=1)
+        # The white list takes every pixel above the cover: the cover slot is a
+        # fixed square and nothing moves when the window is resized.
+        left.rowconfigure(0, weight=1)
         self.list = ttk.Treeview(
             left,
             show="tree",
@@ -1006,17 +1008,18 @@ class UtilitiesDialog:
         # working on: «Загрузка обложки… 42 %» while it downloads, the picture
         # after. The slot is always a square (the window can be small, the fonts
         # can be scaled) with a sunken rim, like a frame the picture is put into.
-        self.cover_frame = ttk.Frame(left)
-        self.cover_frame.grid(row=1, column=0, sticky="nw", pady=(10, 0))
+        self.cover_frame = ttk.Frame(left, width=COVER_BOX, height=COVER_BOX)
+        self.cover_frame.grid(row=1, column=0, sticky="sw", pady=(10, 0))
         self.cover_frame.grid_propagate(False)
+
         background = ttk.Style(self.window).lookup("TFrame", "background") or "#f0f0f0"
         self.cover_photo: ImageTk.PhotoImage | None = None
-        self.cover_size = 0
         self.cover_bytes: bytes | None = None
         self.cover_label = tk.Label(
             self.cover_frame,
             anchor="center",
             justify="center",
+            wraplength=COVER_BOX - 24,
             relief="sunken",
             borderwidth=3,
             background=background,
@@ -1024,7 +1027,6 @@ class UtilitiesDialog:
         self.cover_label.pack(fill="both", expand=True)
         self.cover_label.configure(cursor="hand2")
         self.cover_label.bind("<Button-1>", lambda _event: self._open_cover())
-        left.bind("<Configure>", self._resize_cover)
 
         self.container = ttk.Frame(self.window)
         self.container.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(0, 6))
@@ -1065,11 +1067,11 @@ class UtilitiesDialog:
         self._render_cover()
 
     def _render_cover(self) -> None:
-        if not self.cover_bytes or self.cover_size <= 0:
+        if not self.cover_bytes:
             return
         try:
             with Image.open(io.BytesIO(self.cover_bytes)) as image:
-                inner = max(56, self.cover_size - 12)  # the sunken rim takes 3 px
+                inner = COVER_BOX - 12  # the sunken rim takes 3 px a side
                 image.thumbnail((inner, inner))
                 photo = ImageTk.PhotoImage(image.convert("RGB"))
         except Exception:
@@ -1078,28 +1080,6 @@ class UtilitiesDialog:
             return
         self.cover_photo = photo
         self.cover_label.configure(image=photo, text="")
-
-    def _resize_cover(self, _event=None) -> None:
-        """Keep the slot square: as wide as the list and as tall as it fits.
-
-        The width comes from the list, not from the column: the column is as
-        wide as its widest child, so a slot measured on it would grow the column
-        and then the slot — a loop.
-        """
-        left = self.cover_frame.master
-        width = self.list.winfo_width()
-        height = left.winfo_height()
-        if width <= 1 or height <= 1:
-            return
-        list_bottom = self.list.winfo_y() + self.list.winfo_height()
-        room = height - list_bottom - 10 - 4
-        side = max(72, min(width, room))
-        if side == self.cover_size:
-            return
-        self.cover_size = side
-        self.cover_frame.configure(width=side, height=side)
-        self.cover_label.configure(wraplength=max(56, side - 20))
-        self._render_cover()
 
     def _open_cover(self) -> None:
         panel = self.panels.get(self.current_key)
