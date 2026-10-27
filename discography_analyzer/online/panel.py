@@ -18,9 +18,10 @@ from ..utility_panel import WINDOW_TITLE, BackgroundUtilityPanel
 from .album import iter_albums
 from .apple import STOREFRONTS
 from .discogs import TOKEN_HINT
-from .http import HttpClient, LookupStopped
+from .http import LookupStopped
 from .lookup import (
     PROVIDERS,
+    SERVICE_NAMES,
     AlbumLookup,
     LookupCache,
     load_details,
@@ -29,6 +30,8 @@ from .lookup import (
     provider_class,
 )
 from .preferences import OnlinePreferences, load_preferences, save_preferences
+from .proxy import ProxySettings
+from .proxy_dialog import ProxyDialog
 from .release import AlbumQuery, LookupOptions, Provider
 from .tagging import AlbumPlan, FillOptions, apply_plans, missing_fields, plan_album
 
@@ -67,9 +70,12 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
 
     def build(self) -> None:
         self.preferences: OnlinePreferences = load_preferences()
-        self.client = make_client(self.stop_event)
-        self.thumbnail_client = HttpClient(timeout=10)
+        self.proxy = self.preferences.proxy
+        self.proxy_var = tk.StringVar()
+        self._make_clients()
         self.cache = LookupCache()
+        # Services already reported closed in this country (Deezer /infos).
+        self.warned_services: set[str] = set()
         self.lookups: dict[str, AlbumLookup] = {}
         self.manual_queries: dict[Path, AlbumQuery] = {}
         self.current: str | None = None
@@ -115,7 +121,14 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         source.grid(row=0, column=0, sticky="ew")
         source.columnconfigure(1, weight=1)
         self.provider_line = ttk.Frame(source)
-        self.provider_line.grid(row=0, column=0, columnspan=4, sticky="w")
+        self.provider_line.grid(row=0, column=0, columnspan=4, sticky="ew")
+        self.proxy_button = ttk.Button(
+            self.provider_line, text="Прокси...", command=self._open_proxy
+        )
+        self.proxy_button.pack(side="right")
+        ttk.Label(self.provider_line, textvariable=self.proxy_var).pack(
+            side="right", padx=(0, 8)
+        )
         ttk.Label(self.provider_line, text="Сервис").pack(side="left")
         self.provider_box = ttk.Combobox(
             self.provider_line,
@@ -329,10 +342,39 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             fields=[name for name, _label in FIELD_CHOICES if name in options.fields],
             embed_cover=options.embed_cover,
             save_cover_file=options.save_cover_file,
+            proxy_mode=self.proxy.mode,
+            proxy_url=self.proxy.url,
+            proxy_services=sorted(self.proxy.services),
         )
         # An unwritable settings folder must not stop the utility.
         with contextlib.suppress(OSError):
             save_preferences(self.preferences)
+
+    # -- proxy -------------------------------------------------------------------
+    def _make_clients(self) -> None:
+        """Clients for the current proxy; an unusable address falls back to the system one."""
+        try:
+            self.client = make_client(self.stop_event, self.proxy)
+        except ValueError:
+            self.proxy = ProxySettings()
+            self.client = make_client(self.stop_event, self.proxy)
+        self.thumbnail_client = make_client(proxy=self.proxy, timeout=10)
+        self.proxy_var.set(f"Прокси: {self.proxy.describe(SERVICE_NAMES)}")
+
+    def _open_proxy(self) -> None:
+        if not self.busy:
+            ProxyDialog(self.frame, self.proxy, self._lookup_options(), self._proxy_saved)
+
+    def _proxy_saved(self, settings: ProxySettings) -> None:
+        self.proxy = settings
+        self._make_clients()
+        # Answers that came another way (or failed) must be asked again.
+        self.cache = LookupCache()
+        self.thumbnails.clear()
+        self.warned_services.clear()
+        self._save_preferences()
+        if self.lookups:
+            self.status_var.set("Прокси изменён — нажмите «Найти совпадения»")
 
     # -- folders and backup ------------------------------------------------------
     def _root(self) -> Path | None:
@@ -668,9 +710,12 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
         excluded = self.context.excluded_folders
         extensions = self.context.extensions
         queries = dict(self.manual_queries)
+        check_service = provider.key == "deezer" and provider.key not in self.warned_services
 
         def run() -> None:
             try:
+                if check_service:
+                    self._warn_if_closed(provider)
                 albums = complete = failures = 0
                 for album in iter_albums(
                     root,
@@ -885,6 +930,26 @@ class OnlineTagsPanel(BackgroundUtilityPanel):
             self._write_finished(event[1])
         elif kind == "thumbnail":
             self._thumbnail_loaded(event[1], event[2])
+        elif kind == "service_closed":
+            _kind, key, text = event
+            self.warned_services.add(key)
+            messagebox.showwarning(
+                WINDOW_TITLE,
+                f"{text}.\n\nПоиск продолжается, но ответы могут быть пустыми. "
+                "Прокси задаётся кнопкой «Прокси...».",
+                parent=self.frame,
+            )
+
+    def _warn_if_closed(self, provider: Provider) -> None:
+        """Worker: report once if the service says it is closed in this country."""
+        try:
+            status = provider.check()
+        except LookupStopped:
+            raise
+        except Exception:
+            return  # no answer at all: the search itself will show the error
+        if not status.available:
+            self.post("service_closed", provider.key, status.text)
 
     def close(self) -> None:
         self._save_preferences()
