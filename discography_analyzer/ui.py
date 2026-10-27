@@ -2737,14 +2737,9 @@ class DiscographyAnalyzerApp:
             for track in self.result.tracks
             if self._folder_parts(track.relative_folder)[:prefix_length] == parts
         ]
-        return sorted(
-            selected,
-            key=lambda track: (
-                parse_position(track.disc_number)[0] or 1,
-                parse_position(track.track_number)[0] or 0,
-                track.filename.casefold(),
-            ),
-        )
+        # Folder first, as in the tree: without it an artist folder played its
+        # albums interleaved (A1, B1, A2, B2).
+        return sorted(selected, key=self._folder_sort_key)
 
     def export_playlist(self) -> None:
         tracks = self._playlist_tracks()

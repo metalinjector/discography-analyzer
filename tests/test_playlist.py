@@ -149,6 +149,22 @@ class PlaylistSelectionTests(unittest.TestCase):
 
         self.assertEqual([track.id for track in selected], ["1", "3", "2"])
 
+    def test_a_folder_with_several_albums_keeps_each_album_together(self) -> None:
+        # The subtree was sorted by disc and number only, so an artist folder
+        # with two albums played A1, B1, A2, B2: the albums interleaved.
+        tracks = [
+            make_track("A1", "Artist/(1986) A", number="1"),
+            make_track("B1", "Artist/(1991) B", number="1"),
+            make_track("A2", "Artist/(1986) A", number="2"),
+            make_track("B2", "Artist/(1991) B", number="2"),
+        ]
+        app = self.app_with(tracks, "folder-path::Artist", visible=[])
+
+        self.assertEqual(
+            [track.id for track in app._playlist_tracks()],
+            ["A1", "A2", "B1", "B2"],
+        )
+
     def test_a_track_row_uses_the_visible_rows_in_screen_order(self) -> None:
         tracks = [
             make_track("1", "A", number="2"),
