@@ -2416,6 +2416,8 @@ class DiscographyAnalyzerApp:
             self.result.audit_issues,
             self.result.root,
             self.start_analysis,
+            backup_enabled=self.settings.backup_before_tag_writes,
+            on_backup_changed=self._set_backup_preference,
         )
         self._style_toplevel(dialog.window)
 

@@ -23,6 +23,9 @@ class AuditFixDialog:
         issues: list[MetadataAuditIssue],
         collection_root: Path,
         on_completed: Callable[[], None],
+        *,
+        backup_enabled: bool = True,
+        on_backup_changed: Callable[[bool], None] | None = None,
     ) -> None:
         self.parent = parent
         self.tracks_by_id = {track.id: track for track in tracks}
@@ -47,7 +50,10 @@ class AuditFixDialog:
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(1, weight=1)
 
-        self.backup_enabled_var = tk.BooleanVar(value=True)
+        # The same preference as in the utilities and the numbering fix, so a
+        # choice made once is not silently reset in the next window.
+        self.on_backup_changed = on_backup_changed
+        self.backup_enabled_var = tk.BooleanVar(value=backup_enabled)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.backup_path_var = tk.StringVar(
             value=str(
@@ -260,8 +266,11 @@ class AuditFixDialog:
         self._refresh_rows()
 
     def _backup_state_changed(self) -> None:
-        state = "normal" if self.backup_enabled_var.get() else "disabled"
+        enabled = self.backup_enabled_var.get()
+        state = "normal" if enabled else "disabled"
         self.backup_button.configure(state=state)
+        if self.on_backup_changed is not None:
+            self.on_backup_changed(enabled)
 
     def _choose_backup(self) -> None:
         chosen = filedialog.askdirectory(
