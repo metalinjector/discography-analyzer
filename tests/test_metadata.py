@@ -7,9 +7,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from mutagen.mp4 import MP4FreeForm
 from PIL import Image
 
 from discography_analyzer.metadata import (
+    _as_text_list,
     _cover_details,
     _first,
     _values,
@@ -212,6 +214,12 @@ class MetadataTests(unittest.TestCase):
         self.assertIn("exceeds limit", item.cover_error)
         self.assertEqual(item.cover_size, len(bomb))
         self.assertEqual((item.cover_width, item.cover_height), (0, 0))
+
+    def test_mp4_freeform_text_is_read_as_text(self) -> None:
+        # Picard writes BARCODE and LABEL of M4A files as iTunes freeform
+        # atoms: UTF-8 text, not binary data.
+        self.assertEqual(_as_text_list(MP4FreeForm(b"0602547022868")), ["0602547022868"])
+        self.assertEqual(_as_text_list(b"\x00\x01"), ["<двоичные данные: 2 байт>"])
 
 
 if __name__ == "__main__":

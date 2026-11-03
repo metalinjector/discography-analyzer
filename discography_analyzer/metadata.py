@@ -55,10 +55,18 @@ RAW_FALLBACK_KEYS = {
 }
 
 
+# mutagen.mp4.AtomDataType.UTF8 / UTF16: freeform iTunes atoms with text,
+# e.g. «----:com.apple.iTunes:BARCODE» written by Picard.
+MP4_TEXT_FORMATS = {1: "utf-8", 2: "utf-16-be"}
+
+
 def _as_text_list(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, bytes):
+        encoding = MP4_TEXT_FORMATS.get(getattr(value, "dataformat", None))
+        if encoding:
+            return [value.decode(encoding, "replace")]
         return [f"<двоичные данные: {len(value)} байт>"]
     if isinstance(value, str):
         return [value]
