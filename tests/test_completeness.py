@@ -2,14 +2,20 @@ import unittest
 from pathlib import Path
 
 from discography_analyzer.completeness import (
+    CONTINUOUS,
+    PER_DISC,
+    RELEASE_TOTAL,
     analyze_track_completeness,
     parse_position,
+    release_folder,
+    release_numbering,
 )
 from discography_analyzer.models import (
     AlbumCompletenessIssue,
     Track,
     album_completeness_text,
 )
+from discography_analyzer.parsing import disc_number_of_folder
 
 
 def make_track(
@@ -164,6 +170,153 @@ class CompletenessTests(unittest.TestCase):
         text = album_completeness_text(issue)
         self.assertIn("Ожидаемое количество: 2", text)
         self.assertIn("• bonus.flac", text)
+
+
+ROOT = Path("/music")
+
+
+def make(folder: str, number: int, **values) -> Track:
+    path = ROOT / folder / f"{number}.flac"
+    return Track(
+        id=f"{folder}/{number}/{values.get('disc_number', '')}",
+        path=path,
+        root=ROOT,
+        filename=path.name,
+        relative_path=f"{folder}/{path.name}",
+        relative_folder=folder,
+        format="FLAC",
+        size_bytes=100,
+        **values,
+    )
+
+
+def disc_tracks(folder, album, disc, numbers, total) -> list[Track]:
+    return [
+        make(
+            folder,
+            number,
+            album=album,
+            disc_number=disc,
+            track_number=f"{number}/{total}" if total else str(number),
+        )
+        for number in numbers
+    ]
+
+
+def qobuz_box() -> list[Track]:
+    """12 + 12 + 9 tracks, every disc from 1, TRACKTOTAL 33 in every file."""
+    return [
+        *disc_tracks("Box/CD1", "Vol. 13", "1/3", range(1, 13), 33),
+        *disc_tracks("Box/CD2", "Vol. 13", "2/3", range(1, 13), 33),
+        *disc_tracks("Box/CD3", "Vol. 13", "3/3", range(1, 10), 33),
+    ]
+
+
+class MultiDiscNumberingTests(unittest.TestCase):
+    def test_a_qobuz_box_total_counts_the_whole_release(self) -> None:
+        # The old check read TRACKTOTAL 33 as the size of every disc and
+        # reported «пропущены № 13 … 33» on each disc of a complete box.
+        tracks = qobuz_box()
+
+        self.assertEqual(analyze_track_completeness(tracks), [])
+        numbering = release_numbering(tracks)
+        self.assertEqual(numbering.mode, RELEASE_TOTAL)
+        self.assertEqual((numbering.expected, numbering.missing_count), (33, 0))
+        self.assertEqual(tracks[0].collection_warning, "")
+
+    def test_a_short_qobuz_box_reports_the_gaps_of_each_disc(self) -> None:
+        # «Das Wagner Desaster»: tracks 3, 4 of disc 1 and 3 of disc 2, of 7.
+        tracks = [
+            *disc_tracks("Wagner", "Wagner", "1/2", (3, 4), 7),
+            *disc_tracks("Wagner", "Wagner", "2/2", (3,), 7),
+        ]
+
+        issues = analyze_track_completeness(tracks)
+
+        self.assertEqual(
+            [(issue.disc, issue.missing_numbers) for issue in issues],
+            [(1, (1, 2)), (2, (1, 2))],
+        )
+        self.assertFalse(any(issue.total_from_tags for issue in issues))
+        numbering = release_numbering(tracks)
+        self.assertEqual(numbering.missing_count, 4)
+        self.assertEqual(numbering.unplaced, 0)
+
+    def test_an_absent_disc_and_unplaced_tracks_stay_on_the_release(self) -> None:
+        # «The Dark Side of the Moog, Vol. 3»: 6 + 6 + 4 of 18, disc 4 gone.
+        tracks = [
+            *disc_tracks("Moog/CD1", "Moog", "1/4", range(1, 7), 18),
+            *disc_tracks("Moog/CD2", "Moog", "2/4", range(1, 7), 18),
+            *disc_tracks("Moog/CD3", "Moog", "3/4", range(1, 5), 18),
+        ]
+
+        self.assertEqual(analyze_track_completeness(tracks), [])
+        numbering = release_numbering(tracks)
+        self.assertEqual(numbering.absent_discs, (4,))
+        self.assertEqual(numbering.unplaced, 2)
+
+    def test_continuous_numbering_is_one_sequence_over_the_discs(self) -> None:
+        # The normalizer made Track # continuous: disc 2 goes on from disc 1.
+        tracks = [
+            *disc_tracks("Seq/CD1", "Seq", "1", (3, 4), 7),
+            *disc_tracks("Seq/CD2", "Seq", "2", (7,), 7),
+        ]
+
+        issues = analyze_track_completeness(tracks)
+
+        # Disc 2 is not «missing 1 … 6»; the gap between the discs is the
+        # release's, not a disc's.
+        self.assertEqual(
+            [(issue.relative_folder, issue.missing_numbers) for issue in issues],
+            [("Seq/CD1", (1, 2))],
+        )
+        numbering = release_numbering(tracks)
+        self.assertEqual(numbering.mode, CONTINUOUS)
+        self.assertEqual(numbering.missing, ((0, (1, 2, 5, 6)),))
+
+    def test_per_disc_totals_are_checked_per_disc_as_before(self) -> None:
+        tracks = [
+            *disc_tracks("Set", "Set", "1/2", range(1, 11), 10),
+            *disc_tracks("Set", "Set", "2/2", range(1, 8), 10),
+        ]
+
+        issues = analyze_track_completeness(tracks)
+
+        self.assertEqual(
+            [(issue.disc, issue.missing_numbers) for issue in issues],
+            [(2, (8, 9, 10))],
+        )
+        self.assertTrue(issues[0].total_from_tags)
+        self.assertEqual(release_numbering(tracks).mode, PER_DISC)
+
+    def test_an_equal_total_not_above_the_numbers_is_a_disc_total(self) -> None:
+        tracks = [
+            *disc_tracks("Eq", "Eq", "1/2", range(1, 13), 12),
+            *disc_tracks("Eq", "Eq", "2/2", range(1, 10), 12),
+        ]
+
+        issues = analyze_track_completeness(tracks)
+
+        self.assertEqual([issue.missing_numbers for issue in issues], [(10, 11, 12)])
+
+    def test_disc_folders_without_disc_tags_still_make_discs(self) -> None:
+        tracks = [
+            *disc_tracks("Live/CD1", "Live", "", range(1, 4), None),
+            *disc_tracks("Live/CD2", "Live", "", range(1, 3), None),
+        ]
+
+        numbering = release_numbering(tracks)
+
+        self.assertEqual(numbering.discs, (1, 2))
+        self.assertEqual(numbering.missing_count, 0)
+
+    def test_disc_folder_names(self) -> None:
+        self.assertEqual(disc_number_of_folder("CD2"), 2)
+        self.assertEqual(disc_number_of_folder("Диск 3"), 3)
+        self.assertIsNone(disc_number_of_folder("Discography"))
+        self.assertEqual(release_folder(make("A/Album/CD1", 1)), str(Path("A/Album")))
+        self.assertEqual(release_folder(make("CD1", 1)), str(ROOT))
+        self.assertEqual(release_folder(make(str(ROOT), 1)), str(ROOT))
 
 
 if __name__ == "__main__":
