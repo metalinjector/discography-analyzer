@@ -90,6 +90,7 @@ class Release:
     album: str
     album_artist: str
     artists: str  # album artists and the regular co-artists, for display
+    co_artists: tuple[str, ...]  # on 30 % of the tracks or more, not album artists
     guests: tuple[str, ...]
     compilation: bool
     year: str
@@ -253,12 +254,20 @@ def release_artists(
     30 % of the tracks is a co-artist and joins the list; on fewer it is a
     guest («Bang Bang» on one track of an album).
     """
+    album_artist, artists, _co_artists, guests, compilation = _artist_roles(tracks)
+    return album_artist, artists, guests, compilation
+
+
+def _artist_roles(
+    tracks: list[Track],
+) -> tuple[str, str, tuple[str, ...], tuple[str, ...], bool]:
+    """(album artist, artists for display, co-artists, guests, compilation)."""
     album_artist = _dominant(track.album_artist for track in tracks)
     compilation = any(
         marker in album_artist.casefold() for marker in COMPILATION_ARTISTS
     )
     if compilation:
-        return album_artist, album_artist, (), True
+        return album_artist, album_artist, (), (), True
 
     display: dict[str, str] = {}
     shares: Counter[str] = Counter()
@@ -286,7 +295,7 @@ def release_artists(
     co_artists = [display[key] for key in others if shares[key] / total >= GUEST_SHARE]
     guests = tuple(display[key] for key in others if shares[key] / total < GUEST_SHARE)
     artists = ", ".join(([main] if main else []) + co_artists)
-    return album_artist, artists, guests, False
+    return album_artist, artists, tuple(co_artists), guests, False
 
 
 def release_type(
@@ -466,7 +475,7 @@ def build_release(
     album = _dominant(track.album for track in tracks) or (
         path.name or str(path)
     )
-    album_artist, artists, guests, compilation = release_artists(tracks)
+    album_artist, artists, co_artists, guests, compilation = _artist_roles(tracks)
     years = [track.year.strip()[:4] for track in tracks if track.year.strip()[:4].isdigit()]
     duration = sum(
         track.comparison_duration
@@ -494,6 +503,7 @@ def build_release(
         album=album,
         album_artist=album_artist,
         artists=artists or album_artist,
+        co_artists=co_artists,
         guests=guests,
         compilation=compilation,
         year=_dominant(years),
