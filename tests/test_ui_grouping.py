@@ -369,6 +369,7 @@ class UiGroupingTests(unittest.TestCase):
         self.assertIsNone(app._selected_folder())
 
         app.result = SimpleNamespace(root=Path("/music"))
+        app.release_by_id = {}
         focused = {"id": "folder-path::Metallica/1986 - Master of Puppets"}
         app.tree = SimpleNamespace(focus=lambda: focused["id"])
         selected = SimpleNamespace(path=Path("/music/Other/song.flac"))
@@ -450,7 +451,9 @@ class UiGroupingTests(unittest.TestCase):
         for number, member in enumerate(members):
             member.relative_folder = f"Folder {number}"
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
-        app.result = SimpleNamespace(root=Path("/music"), completeness_issues=[])
+        app.result = SimpleNamespace(
+            root=Path("/music"), completeness_issues=[], releases=[], gaps_checked=True
+        )
         app.tree = FakeTree()
         app._folder_column_width = None
         app._group_column_width = 300
@@ -514,11 +517,13 @@ class UiGroupingTests(unittest.TestCase):
         app = DiscographyAnalyzerApp.__new__(DiscographyAnalyzerApp)
         app.tree = FakeTree()
         app.info_text = FakeText()
+        app.release_by_id = {}
         app.result = SimpleNamespace(
             root=Path("/music"),
             tracks=[inside, outside],
             completeness_issues=[],
             audit_issues=[],
+            releases=[],
         )
         app.track_by_id = {item.id: item for item in (inside, outside)}
         app.audit_issue_by_id = {}
@@ -604,6 +609,8 @@ class UiGroupingTests(unittest.TestCase):
         app.result = SimpleNamespace(
             root=Path("/music"),
             completeness_issues=[],
+            releases=[],
+            gaps_checked=True,
         )
         app.tree = FakeTree()
         app._folder_column_width = None
@@ -660,6 +667,7 @@ class UiGroupingTests(unittest.TestCase):
         app.issue_by_id = {"old": object()}
         app.audit_issue_by_id = {"old": object()}
         app.audit_item_track_ids = {"old": "old"}
+        app.release_by_id = {"old": object()}
         app.visible_tracks = [object()]
         app.tree = FakeTree()
         app.statistics_var = FakeValue()
@@ -683,6 +691,7 @@ class UiGroupingTests(unittest.TestCase):
         self.assertEqual(app.issue_by_id, {})
         self.assertEqual(app.audit_issue_by_id, {})
         self.assertEqual(app.audit_item_track_ids, {})
+        self.assertEqual(app.release_by_id, {})
         self.assertEqual(app.visible_tracks, [])
         self.assertEqual(app.tree.deleted, ("old-row",))
         self.assertEqual(app.shown_count_var.value, "0 из 0")
@@ -712,6 +721,8 @@ class UiGroupingTests(unittest.TestCase):
                 # A file of the collection folder itself carries its full path.
                 issue(str(Path("/music")), missing=(5,)),
             ],
+            releases=[],
+            gaps_checked=True,
         )
 
         self.assertEqual(
@@ -758,6 +769,8 @@ class UiGroupingTests(unittest.TestCase):
         app.result = SimpleNamespace(
             root=Path("/music"),
             completeness_issues=[gap(in_album.relative_folder), gap(in_root.relative_folder)],
+            releases=[],
+            gaps_checked=True,
         )
         app.tree = FakeTree()
         app._folder_column_width = None

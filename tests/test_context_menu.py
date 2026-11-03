@@ -48,6 +48,7 @@ def app_on(row: str, tracks=()) -> DiscographyAnalyzerApp:
     app.result = SimpleNamespace(root=Path("/music"))
     app.track_by_id = {track.id: track for track in tracks}
     app.audit_item_track_ids = {}
+    app.release_by_id = {}
     app.menu_folder = None
     app.context_menu = FakeMenu()
     app.folder_menu = FakeMenu()

@@ -18,7 +18,7 @@ from PIL import Image, ImageTk
 
 from .audit_dialog import AuditFixDialog
 from .audit_models import AuditSeverity, MetadataAuditIssue
-from .completeness import album_group_key, parse_position
+from .completeness import album_group_key, parse_position, track_disc
 from .constants import (
     APP_NAME,
     DEFAULT_REPORT_COLORS,
@@ -39,6 +39,7 @@ from .models import (
     AnalysisResult,
     Track,
     TrackStatus,
+    _clock,
     album_completeness_text,
     folder_summary_text,
 )
@@ -46,6 +47,15 @@ from .numbering_dialog import NumberingFixDialog
 from .numbering_fix import NumberingPlan, plan_numbering_fix
 from .parsing import files_word, folders_word, validate_markers
 from .playlist import write_playlist
+from .releases import (
+    ISRC_KEYS,
+    Release,
+    ReleaseStatus,
+    cover_file_matches,
+    raw_tag_values,
+    release_card_text,
+    track_quality,
+)
 from .scanner import (
     AnalysisStopped,
     NoAudioFilesError,
@@ -56,6 +66,27 @@ from .settings import AppSettings
 from .utilities_dialog import FOLDER_ACTIONS, UtilitiesDialog, UtilityContext
 
 TABLE_FIELD_IDS = [item[0] for item in TABLE_COLUMNS]
+# The «Релизы» tab reuses the table columns under its own headings, as the
+# audit tab does: the release row first, its tracks inside it.
+RELEASE_HEADINGS = {
+    "status": "Комплект",
+    "track_number": "Треков",
+    "base_title": "Альбом / Title",
+    "variation": "Тип",
+    "relation": "Исполнители",
+    "collection_warning": "Замечания",
+    "relative_folder": "Папка",
+    "title": "Лейбл",
+    "artist": "BARCODE / ISRC",
+    "album": "Обложка",
+    "bitrate": "Качество",
+}
+RELEASE_ROW_TAGS = {
+    ReleaseStatus.COMPLETE: "ReleaseComplete",
+    ReleaseStatus.NO_TOTAL: "ReleaseNoTotal",
+    ReleaseStatus.INCOMPLETE: "ReleaseIncomplete",
+    ReleaseStatus.UNKNOWN: "ReleaseUnknown",
+}
 
 
 # The same physical key in the Russian (ЙЦУКЕН) layout. Tk matches shortcuts
@@ -118,6 +149,10 @@ class DiscographyAnalyzerApp:
         self.events: queue.Queue[tuple] = queue.Queue()
         self.sort_column: str | None = None
         self.sort_reverse = False
+        # The releases tab sorts on its own: its columns mean other things.
+        self.release_sort_column: str | None = None
+        self.release_sort_reverse = False
+        self.release_by_id: dict[str, Release] = {}
         self.cover_photo: ImageTk.PhotoImage | None = None
         self.group_labels: dict[str, str] = {}
         self.group_members: dict[str, list[str]] = {}
@@ -353,6 +388,7 @@ class DiscographyAnalyzerApp:
             ("variations", "Вариации"),
             ("unique", "Уникальные"),
             ("folders", "По папкам"),
+            ("releases", "Релизы"),
             ("audit", "Аудит"),
         )
         for value, text in tabs:
@@ -771,6 +807,9 @@ class DiscographyAnalyzerApp:
         """The folder row in focus, or the folder of the selected track."""
         if self.result is None:
             return None
+        release = self.release_by_id.get(self.tree.focus())
+        if release is not None:
+            return release.path
         parts = self._folder_parts_from_tree_id(self.tree.focus())
         if parts:
             return self.result.root.joinpath(*parts)
@@ -1139,6 +1178,32 @@ class DiscographyAnalyzerApp:
             foreground="#ffe9e7" if dark else "#fff2f0",
             font=("TkDefaultFont", 9, "bold"),
         )
+        release_colors = {
+            "ReleaseComplete": (
+                "#294b36" if dark else "#e5f3e8",
+                "#effbf2" if dark else "#255f2c",
+            ),
+            "ReleaseNoTotal": (
+                "#41474d" if dark else "#e5e7e9",
+                "#f5f6f7" if dark else "#2f3439",
+            ),
+            # The colour of a folder short of files in «По папкам».
+            "ReleaseIncomplete": (
+                "#5a1c1c" if dark else "#591a1a",
+                "#ffe9e7" if dark else "#fff2f0",
+            ),
+            "ReleaseUnknown": (
+                "#29465d" if dark else "#e2effb",
+                "#eef7ff" if dark else "#174e78",
+            ),
+        }
+        for tag, (background, foreground) in release_colors.items():
+            self.tree.tag_configure(
+                tag,
+                background=background,
+                foreground=foreground,
+                font=("TkDefaultFont", 9, "bold"),
+            )
         audit_colors = {
             "AuditGroup": (
                 "#41474d" if dark else "#e5e7e9",
@@ -1329,6 +1394,7 @@ class DiscographyAnalyzerApp:
         self.audit_issue_by_id = {
             issue.id: issue for issue in result.audit_issues
         }
+        self.release_by_id = {release.id: release for release in result.releases}
         self._restore_buttons()
         self.unique_copy_button.configure(state="normal")
         self.playlist_button.configure(state="normal")
@@ -1351,6 +1417,7 @@ class DiscographyAnalyzerApp:
         self.issue_by_id.clear()
         self.audit_issue_by_id.clear()
         self.audit_item_track_ids.clear()
+        self.release_by_id.clear()
         self.visible_tracks.clear()
         self.tree.delete(*self.tree.get_children())
         self.statistics_var.set("Статистика: —")
@@ -1385,7 +1452,7 @@ class DiscographyAnalyzerApp:
         )
         tree_controls_enabled = (
             active == "folders" and self.folder_tree_mode_var.get()
-        )
+        ) or active == "releases"
         tree_control_state = "normal" if tree_controls_enabled else "disabled"
         self.expand_tree_button.configure(state=tree_control_state)
         self.collapse_tree_button.configure(state=tree_control_state)
@@ -1437,6 +1504,18 @@ class DiscographyAnalyzerApp:
                 track for track in tracks if track.id in visible_ids
             ]
             self._insert_audit_groups(issues)
+        elif active == "releases":
+            releases = self._sorted_releases(
+                [
+                    release
+                    for release in self.result.releases
+                    if not query or query in release.search_text()
+                ]
+            )
+            self.visible_tracks = [
+                track for release in releases for track in release.tracks
+            ]
+            self._insert_release_rows(releases)
         elif active == "folders":
             if query:
                 tracks = [track for track in tracks if query in track.search_text()]
@@ -1468,9 +1547,17 @@ class DiscographyAnalyzerApp:
         for item_id in selected:
             if self.tree.exists(item_id):
                 self.tree.selection_add(item_id)
-        self.shown_count_var.set(
-            f"{len(self.visible_tracks)} из {len(self.result.tracks)}"
-        )
+        if active == "releases":
+            shown = sum(
+                1 for item_id in self.tree.get_children("") if item_id in self.release_by_id
+            )
+            self.shown_count_var.set(
+                f"{shown} из {len(self.result.releases)} релизов"
+            )
+        else:
+            self.shown_count_var.set(
+                f"{len(self.visible_tracks)} из {len(self.result.tracks)}"
+            )
         self._refresh_headings()
         self._refresh_numbering_button()
 
@@ -1480,6 +1567,12 @@ class DiscographyAnalyzerApp:
         self._autosave()
 
     def _set_folder_tree_open(self, opened: bool) -> None:
+        if self.current_tab.get() == "releases":
+            for item_id in self.tree.get_children(""):
+                if item_id in self.release_by_id:
+                    self.tree.item(item_id, open=opened)
+                    self._set_group_label(item_id, opened)
+            return
         if (
             self.current_tab.get() != "folders"
             or not self.folder_tree_mode_var.get()
@@ -1790,6 +1883,116 @@ class DiscographyAnalyzerApp:
                 )
                 self.audit_item_track_ids[child_id] = track.id
 
+    def _release_sort_key(self, release: Release):
+        column = self.release_sort_column
+        if column in ("status", None):
+            return (release.status.order, -release.missing_count, release.folder.casefold())
+        values = {
+            "#0": release.title.casefold(),
+            "track_number": (release.found, release.numbering.expected),
+            "base_title": release.album.casefold(),
+            "variation": release.type_text.casefold(),
+            "relation": release.artists_text.casefold(),
+            "collection_warning": release.notes_text.casefold(),
+            "relative_folder": release.folder.casefold(),
+            "title": release.label.casefold(),
+            "artist": ", ".join(release.barcodes),
+            "album": release.cover_text.casefold(),
+            "year": (not release.year, release.year),
+            "genre": release.genre.casefold(),
+            "duration": release.duration,
+            "bitrate": release.quality.casefold(),
+            "format": release.formats.casefold(),
+            "size_mb": release.size_bytes,
+        }
+        return values.get(column, release.folder.casefold())
+
+    def _sorted_releases(self, releases: list[Release]) -> list[Release]:
+        """Folder order until a heading is clicked on the releases tab."""
+        if self.release_sort_column is None:
+            return list(releases)
+        return sorted(
+            releases,
+            key=self._release_sort_key,
+            reverse=self.release_sort_reverse,
+        )
+
+    def _release_track_values(self, track: Track) -> list[str]:
+        """A track inside a release row, under the release headings."""
+        if track.cover_error:
+            cover = "повреждена"
+        elif track.cover_hash:
+            cover = "есть"
+        else:
+            cover = "нет"
+        return self._row_values(
+            status=track.status.decorated,
+            track_number=track.track_number,
+            base_title=track.title or track.filename_title,
+            variation=track.variation or "—",
+            relation=track.artist,
+            collection_warning=track.collection_warning or "—",
+            relative_folder=track.relative_folder,
+            artist=", ".join(raw_tag_values(track, ISRC_KEYS)),
+            album=cover,
+            year=track.year,
+            genre=track.genre,
+            duration=track.duration_display,
+            bitrate=track_quality(track),
+            format=track.format,
+            size_mb=round(track.size_mb, 2),
+        )
+
+    def _insert_release_rows(self, releases: list[Release]) -> None:
+        self.tree.configure(show=("tree", "headings"))
+        width = self._group_column_width
+        if width is None:
+            width = _responsive_group_width(self.tree.winfo_width())
+        self.tree.column("#0", width=width, minwidth=260, stretch=False)
+        for release in releases:
+            label = release.title
+            self.tree.insert(
+                "",
+                "end",
+                iid=release.id,
+                text=f"[+] {label}",
+                values=self._row_values(
+                    status=f"● {release.status_text}",
+                    track_number=release.counts_text,
+                    base_title=release.album,
+                    variation=release.type_text,
+                    relation=release.artists_text,
+                    collection_warning=release.notes_text,
+                    relative_folder=release.folder,
+                    title=release.label or "—",
+                    artist=", ".join(release.barcodes) or "—",
+                    album=release.cover_text,
+                    year=release.year,
+                    genre=release.genre,
+                    duration=_clock(round(release.duration)),
+                    bitrate=release.quality,
+                    format=release.formats,
+                    size_mb=round(release.size_bytes / 1024 / 1024, 2),
+                ),
+                tags=(RELEASE_ROW_TAGS[release.status],),
+                open=False,
+            )
+            self.group_labels[release.id] = label
+            multi_disc = len(release.numbering.discs) > 1
+            for track in release.tracks:
+                number, _total = parse_position(track.track_number)
+                text = f"{number:02d} · {track.filename}" if number else track.filename
+                if multi_disc:
+                    text = f"CD{track_disc(track)} · {text}"
+                self.tree.insert(
+                    release.id,
+                    "end",
+                    iid=track.id,
+                    text=text,
+                    values=self._release_track_values(track),
+                    tags=(track.status.value,),
+                )
+
     def _set_group_label(self, item_id: str, opened: bool) -> None:
         label = self.group_labels.get(item_id)
         if label and self.tree.exists(item_id):
@@ -1866,11 +2069,21 @@ class DiscographyAnalyzerApp:
         """Folders whose release is short of files according to the tags."""
         if not self.result:
             return set()
-        return {
+        folders = {
             self._folder_parts(issue.relative_folder)
             for issue in self.result.completeness_issues
             if issue.missing_numbers
         }
+        if self.result.gaps_checked:
+            # A release short of tracks across its discs — a missing disc or
+            # tracks beyond the last number of a Qobuz box — marks its folder
+            # even when no single disc shows a gap.
+            folders.update(
+                self._folder_parts(release.folder)
+                for release in self.result.releases
+                if release.status == ReleaseStatus.INCOMPLETE
+            )
+        return folders
 
     def _insert_folder_tree(self, tracks: list[Track]) -> None:
         if not self.result:
@@ -1979,6 +2192,14 @@ class DiscographyAnalyzerApp:
         return str(track.table_value(column)).casefold()
 
     def sort_by(self, column: str) -> None:
+        if self.current_tab.get() == "releases":
+            if self.release_sort_column == column:
+                self.release_sort_reverse = not self.release_sort_reverse
+            else:
+                self.release_sort_column = column
+                self.release_sort_reverse = False
+            self.refresh_table()
+            return
         if self.sort_column == column:
             self.sort_reverse = not self.sort_reverse
         else:
@@ -1987,15 +2208,20 @@ class DiscographyAnalyzerApp:
         self.refresh_table()
 
     def _refresh_headings(self) -> None:
+        releases_tab = self.current_tab.get() == "releases"
+        sort_column = self.release_sort_column if releases_tab else self.sort_column
+        sort_reverse = self.release_sort_reverse if releases_tab else self.sort_reverse
         if self.current_tab.get() == "audit":
             zero_title = "Файлы и замечания"
+        elif releases_tab:
+            zero_title = "Релизы и треки"
         elif self.current_tab.get() == "folders" and self.folder_tree_mode_var.get():
             zero_title = "Структура папок"
         else:
             zero_title = "Группы и файлы"
         zero_arrow = ""
-        if self.sort_column == "#0":
-            zero_arrow = " ▼" if self.sort_reverse else " ▲"
+        if sort_column == "#0":
+            zero_arrow = " ▼" if sort_reverse else " ▲"
         self.tree.heading("#0", text=zero_title + zero_arrow)
         audit_headings = {
             "status": "Уровень",
@@ -2010,9 +2236,11 @@ class DiscographyAnalyzerApp:
         for column_id, heading, _width in TABLE_COLUMNS:
             if self.current_tab.get() == "audit":
                 heading = audit_headings.get(column_id, heading)
+            elif releases_tab:
+                heading = RELEASE_HEADINGS.get(column_id, heading)
             arrow = ""
-            if column_id == self.sort_column:
-                arrow = " ▼" if self.sort_reverse else " ▲"
+            if column_id == sort_column:
+                arrow = " ▼" if sort_reverse else " ▲"
             self.tree.heading(column_id, text=heading + arrow)
 
     def _update_statistics(self) -> None:
@@ -2023,6 +2251,8 @@ class DiscographyAnalyzerApp:
         self.statistics_var.set(
             "Статистика: "
             f"всего {len(result.tracks)} · "
+            f"релизов {len(result.releases)}, неполных "
+            f"{sum(release.status == ReleaseStatus.INCOMPLETE for release in result.releases)} · "
             f"уникальных {result.count(TrackStatus.UNIQUE)} · "
             f"дубликатов {result.count(TrackStatus.DUPLICATE)} · "
             f"вариаций {result.count(TrackStatus.VARIATION)} · "
@@ -2051,6 +2281,10 @@ class DiscographyAnalyzerApp:
     def _selection_changed(self, _event=None) -> None:
         self._refresh_numbering_button()
         focused = self.tree.focus()
+        release = self.release_by_id.get(focused)
+        if release is not None:
+            self._show_release_in_panel(release)
+            return
         if focused.startswith("audit-issue::"):
             audit_issue = self.audit_issue_by_id.get(
                 focused.removeprefix("audit-issue::")
@@ -2134,6 +2368,24 @@ class DiscographyAnalyzerApp:
         self._set_text(self.info_text, "\n".join(lines))
         self._load_cover(track, self.cover_label, 190)
 
+    def _show_release_in_panel(self, release: Release) -> None:
+        self._set_text(
+            self.info_text, release_card_text(release, cover_file_matches(release))
+        )
+        with_cover = next(
+            (
+                track
+                for track in release.tracks
+                if track.cover_hash and not track.cover_error
+            ),
+            None,
+        )
+        if with_cover is not None:
+            self._load_cover(with_cover, self.cover_label, 190)
+        else:
+            self.cover_photo = None
+            self.cover_label.configure(image="", text="Встроенной обложки\nв релизе нет")
+
     def _show_folder_in_panel(self, parts: tuple[str, ...]) -> None:
         """Summary of a folder row in the tree: its album or whole subtree."""
         if not self.result:
@@ -2160,6 +2412,11 @@ class DiscographyAnalyzerApp:
                 ],
                 [issue for issue in result.audit_issues if issue.track_id in track_ids],
                 cover_file.name if cover_file else "",
+                [
+                    release
+                    for release in result.releases
+                    if any(track.id in track_ids for track in release.tracks)
+                ],
             ),
         )
         with_cover = next(
@@ -2372,6 +2629,14 @@ class DiscographyAnalyzerApp:
     def _show_context_menu(self, event) -> None:
         row = self.tree.identify_row(event.y)
         if not row:
+            return
+        release = self.release_by_id.get(row)
+        if release is not None:
+            # A release row: the menu of its folder.
+            self.tree.selection_set(row)
+            self.tree.focus(row)
+            self.menu_folder = release.path
+            self.folder_menu.tk_popup(event.x_root, event.y_root)
             return
         parts = self._folder_parts_from_tree_id(row)
         if parts is not None and self.result is not None:
@@ -2775,6 +3040,9 @@ class DiscographyAnalyzerApp:
         """The folder subtree, or the visible rows of the current tab in order."""
         if self.result is None:
             return []
+        release = self.release_by_id.get(self.tree.focus())
+        if release is not None:
+            return list(release.tracks)
         parts = self._folder_parts_from_tree_id(self.tree.focus())
         if parts is None:
             return list(self.visible_tracks)
@@ -2799,8 +3067,12 @@ class DiscographyAnalyzerApp:
             )
             return
         parts = self._folder_parts_from_tree_id(self.tree.focus())
+        release = self.release_by_id.get(self.tree.focus())
         assert self.result is not None
-        if parts:
+        if release is not None:
+            initial_dir = release.path
+            initial_name = f"{release.path.name or 'playlist'}.m3u8"
+        elif parts:
             folder = self.result.root.joinpath(*parts)
             initial_dir = folder
             initial_name = f"{folder.name or 'playlist'}.m3u8"
@@ -2860,6 +3132,7 @@ class DiscographyAnalyzerApp:
             "attention": tk.BooleanVar(value=True),
             "matrix": tk.BooleanVar(value=True),
             "folders": tk.BooleanVar(value=True),
+            "releases": tk.BooleanVar(value=True),
             "audit": tk.BooleanVar(value=True),
         }
         for index, (key, label) in enumerate(
@@ -2868,6 +3141,7 @@ class DiscographyAnalyzerApp:
                 ("attention", "Только дубликаты"),
                 ("matrix", "Матрица дубликатов"),
                 ("folders", "Сводка по папкам"),
+                ("releases", "Релизы"),
                 ("audit", "Аудит метаданных"),
             )
         ):
@@ -2937,6 +3211,7 @@ class DiscographyAnalyzerApp:
                     [key for key, variable in column_vars.items() if variable.get()],
                     dict(self.settings.report_colors),
                     result.audit_issues,
+                    result.releases,
                 )
                 messagebox.showinfo(
                     APP_NAME, f"Отчёт успешно сохранён:\n{path}", parent=window

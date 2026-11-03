@@ -145,6 +145,7 @@ class PlaylistSelectionTests(unittest.TestCase):
             root=Path("E:/Music"),
         )
         app.visible_tracks = visible
+        app.release_by_id = {}
         app.tree = type("FakeTree", (), {"focus": lambda _self: focus})()
         return app
 

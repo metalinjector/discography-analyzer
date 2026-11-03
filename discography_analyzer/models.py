@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .audit_models import AuditSeverity, MetadataAuditIssue
 from .parsing import files_word
+
+if TYPE_CHECKING:
+    from .releases import Release
 
 
 class TrackStatus(str, Enum):
@@ -332,6 +336,7 @@ def folder_summary_text(
     completeness_issues: list[AlbumCompletenessIssue],
     audit_issues: list[MetadataAuditIssue],
     cover_file: str = "",
+    releases: Sequence[Release] = (),
 ) -> str:
     """Info panel text for a folder row: the album, or everything below it."""
     subfolders = len({track.relative_folder for track in tracks} - {relative_folder})
@@ -399,6 +404,33 @@ def folder_summary_text(
     if not completeness_issues:
         lines.append("Пропуски по тегам Track # не обнаружены")
 
+    if releases:
+        lines.extend(["", "РЕЛИЗЫ"])
+        by_status = Counter(release.status.value for release in releases)
+        lines.append(
+            f"Всего {len(releases)}: "
+            + " · ".join(
+                f"{label} {by_status[name]}"
+                for name, label in (
+                    ("Полный", "полных"),
+                    ("Без пропусков", "без пропусков"),
+                    ("Неполный", "неполных"),
+                    ("Не проверить", "не проверить"),
+                )
+                if by_status[name]
+            )
+        )
+        ordered = sorted(
+            releases, key=lambda release: (release.status.order, release.title.casefold())
+        )
+        for release in ordered[:8]:
+            detail = f"{release.status_text}, {release.counts_text}, {release.type_text}"
+            if release.notes:
+                detail += f" — {release.notes[0]}"
+            lines.append(f"• {release.title}: {detail}")
+        if len(ordered) > 8:
+            lines.append(f"… и ещё {len(ordered) - 8}")
+
     severities = Counter(issue.severity for issue in audit_issues)
     lines.extend(
         [
@@ -423,6 +455,9 @@ class AnalysisResult:
     root: Path
     completeness_issues: list[AlbumCompletenessIssue] = field(default_factory=list)
     audit_issues: list[MetadataAuditIssue] = field(default_factory=list)
+    releases: list[Release] = field(default_factory=list)
+    # False when «Проверять пропуски номеров треков» was off for this run.
+    gaps_checked: bool = True
 
     def count(self, status: TrackStatus) -> int:
         return sum(track.status == status for track in self.tracks)
