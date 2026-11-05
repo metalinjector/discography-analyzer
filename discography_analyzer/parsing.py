@@ -13,6 +13,16 @@ ARTIST_SEPARATOR_RE = re.compile(
     r"|\s+(?:with|x|and)\s+",
     re.IGNORECASE,
 )
+# «CD1», «CD 2», «Disc 1», «Disk2 - Bonus», «Диск 1»: a disc of the release
+# in the folder above, not a release of its own.
+DISC_FOLDER_RE = re.compile(
+    r"^(?:cd|dis[ck]|диск)\s*[-_.]?\s*(\d{1,2})(?:\D.*)?$", re.IGNORECASE
+)
+
+
+def disc_number_of_folder(name: str) -> int | None:
+    match = DISC_FOLDER_RE.match(name.strip())
+    return int(match.group(1)) if match else None
 
 
 def title_from_filename(filename: str) -> str:

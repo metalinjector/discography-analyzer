@@ -38,6 +38,7 @@ from .cover_extraction import (
 )
 from .online.panel import OnlineTagsPanel
 from .parsing import files_word, folders_word
+from .rename_panel import RenamePanel
 from .utility_panel import WINDOW_TITLE, UtilityContext, UtilityPanel
 
 COVER_FORMATS = "MP3, FLAC, M4A, APE"
@@ -956,12 +957,14 @@ UTILITY_PANELS: tuple[type[UtilityPanel], ...] = (
     CoverEmbeddingPanel,
     CoverExtractionPanel,
     OnlineTagsPanel,
+    RenamePanel,
 )
 
 # The main window's menu on a folder: (menu item, the utility it opens with
 # that folder already chosen). A new entry shows up in the menu by itself.
 FOLDER_ACTIONS: tuple[tuple[str, type[UtilityPanel]], ...] = (
     ("Заполнить теги из интернета…", OnlineTagsPanel),
+    ("Переименовать по тегам…", RenamePanel),
 )
 
 

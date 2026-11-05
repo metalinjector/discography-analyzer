@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -12,7 +13,10 @@ from openpyxl.utils import get_column_letter
 
 from .audit_models import AuditSeverity, MetadataAuditIssue
 from .constants import DEFAULT_REPORT_COLORS, EXPORT_COLUMNS
-from .models import Track, TrackStatus
+from .models import Track, TrackStatus, _clock
+
+if TYPE_CHECKING:
+    from .releases import Release
 
 ORANGE = "E97824"
 DARK_ORANGE = "C85A0A"
@@ -408,6 +412,97 @@ def _write_folder_summary(
     return True
 
 
+RELEASE_STATUS_STYLES = {
+    "Полный": (GREEN, GREEN_DARK),
+    "Без пропусков": ("E3E5E7", GRAPHITE),
+    "Неполный": (CORAL, CORAL_DARK),
+    "Не проверить": (BLUE, BLUE_DARK),
+}
+
+
+def _write_releases_sheet(workbook: Workbook, releases: Sequence[Release]) -> bool:
+    """One row per release: the library index the normalizer scripts kept."""
+    if not releases:
+        return False
+    sheet = workbook.create_sheet("Релизы")
+    headers = [
+        "Год",
+        "Альбом",
+        "Тип",
+        "Исполнитель альбома",
+        "Исполнители",
+        "Гости",
+        "Лейбл",
+        "BARCODE",
+        "Есть",
+        "Всего",
+        "Не хватает",
+        "Дисков",
+        "Комплект",
+        "Замечания",
+        "Длительность",
+        "Формат",
+        "Качество",
+        "Обложка",
+        "Папка",
+    ]
+    statuses = Counter(release.status.value for release in releases)
+    _prepare_sheet(
+        sheet,
+        "Релизы",
+        (
+            f"Релизов: {len(releases)}  ·  "
+            + "  ·  ".join(
+                f"{name}: {statuses[name]}"
+                for name in RELEASE_STATUS_STYLES
+                if statuses[name]
+            )
+            + "  ·  «*» — тип оценён по числу треков и длительности"
+        ),
+        headers,
+        tab_color=BLUE_DARK,
+    )
+    status_column = headers.index("Комплект") + 1
+    fonts = {
+        name: Font(color=font_color, bold=True, size=9)
+        for name, (_fill_color, font_color) in RELEASE_STATUS_STYLES.items()
+    }
+    for offset, release in enumerate(releases):
+        numbering = release.numbering
+        values = [
+            release.year,
+            release.album,
+            release.type_text,
+            release.album_artist,
+            release.artists,
+            ", ".join(release.guests),
+            release.label,
+            ", ".join(release.barcodes),
+            release.found,
+            numbering.expected if numbering.verified and numbering.expected else "",
+            release.missing_count or "",
+            release.disc_count,
+            release.status_text,
+            release.notes_text if release.notes else "",
+            _clock(round(release.duration)),
+            release.formats,
+            release.quality,
+            release.cover_text,
+            release.folder,
+        ]
+        row_number = DATA_START_ROW + offset
+        for column, value in enumerate(values, start=1):
+            sheet.cell(row_number, column, _safe(value))
+        _style_data_row(sheet, row_number, len(headers))
+        fill_color, _font_color = RELEASE_STATUS_STYLES[release.status.value]
+        status_cell = sheet.cell(row_number, status_column)
+        status_cell.fill = _fill(fill_color)
+        status_cell.font = fonts[release.status.value]
+    _fit_columns(sheet, maximum=60, minimum=8)
+    _finish_table(sheet)
+    return True
+
+
 def _write_audit_sheet(
     workbook: Workbook,
     issues: list[MetadataAuditIssue],
@@ -495,6 +590,7 @@ def export_xlsx(
     selected_columns: list[str],
     colors: dict[str, str],
     audit_issues: list[MetadataAuditIssue] | None = None,
+    releases: Sequence[Release] = (),
 ) -> Path:
     if not tracks:
         raise ValueError("Нет данных для экспорта")
@@ -530,6 +626,8 @@ def export_xlsx(
         _write_matrix(workbook, tracks, colors)
     if selected_sheets.get("folders"):
         _write_folder_summary(workbook, tracks, colors)
+    if selected_sheets.get("releases"):
+        _write_releases_sheet(workbook, releases)
     if selected_sheets.get("audit"):
         _write_audit_sheet(
             workbook,

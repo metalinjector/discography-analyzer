@@ -14,6 +14,7 @@ from .metadata import read_metadata
 from .metadata_audit import audit_metadata
 from .models import AnalysisResult, Track, TrackStatus
 from .parsing import title_from_filename
+from .releases import build_releases
 
 ProgressCallback = Callable[[int, str, int, int, int], None]
 
@@ -170,6 +171,7 @@ def analyze_collection(
         sum(track.status == TrackStatus.VARIATION for track in tracks),
     )
     audit_issues = audit_metadata(tracks)
+    releases = build_releases(tracks, root)
     variations = sum(track.status == TrackStatus.VARIATION for track in tracks)
     final_state = "Анализ завершён!"
     if skipped_files:
@@ -181,4 +183,6 @@ def analyze_collection(
         root=root,
         completeness_issues=completeness_issues,
         audit_issues=audit_issues,
+        releases=releases,
+        gaps_checked=check_track_gaps,
     )

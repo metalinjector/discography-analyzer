@@ -18,12 +18,10 @@ from ..fileops import iter_folders, list_audio_files
 from ..metadata import read_metadata
 from ..metadata_audit import find_folder_cover
 from ..models import Track
-from ..parsing import title_from_filename
+from ..parsing import disc_number_of_folder, title_from_filename
 from .http import LookupStopped
 from .release import parse_year
 
-# «CD1», «CD 2», «Disc 1», «Disk2 - Bonus», «Диск 1».
-DISC_FOLDER_RE = re.compile(r"^(?:cd|dis[ck]|диск)\s*[-_.]?\s*(\d{1,2})(?:\D.*)?$", re.IGNORECASE)
 # Bracketed rip details that are not part of the album title: [FLAC], (24-96),
 # {WEB}, [2CD]. «(Remastered)» or «(Deluxe Edition)» stay: they name the edition.
 SOURCE_DETAILS_RE = re.compile(
@@ -100,11 +98,6 @@ class LocalAlbum:
 
 def track_has_cover(track: Track) -> bool:
     return track.cover_size > 0 and not track.cover_error
-
-
-def disc_number_of_folder(name: str) -> int | None:
-    match = DISC_FOLDER_RE.match(name.strip())
-    return int(match.group(1)) if match else None
 
 
 def parse_folder_name(name: str) -> tuple[str, str, int | None]:
